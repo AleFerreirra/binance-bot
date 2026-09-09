@@ -77,3 +77,30 @@ def test_public_client_accepts_missing_api_keys(monkeypatch):
     client = BinanceClient("", "", config=None)
     assert client.client.api_key is None
     assert client.client.api_secret is None
+
+
+def test_public_rest_mode_skips_ping_and_uses_configured_base_url(monkeypatch):
+    class FakeClient:
+        timestamp_offset = 0
+
+        def __init__(self, api_key, api_secret, requests_params=None):
+            pass
+
+        def get_server_time(self):
+            raise AssertionError("sync_time should not run in public REST mode")
+
+        def ping(self):
+            raise AssertionError("ping should not run in public REST mode")
+
+    class Config:
+        API_TIMEOUT = 20
+        MAX_API_RETRIES = 1
+        API_RETRY_DELAY = Decimal("0")
+        API_RATE_LIMIT_WEIGHT = 1200
+        API_RATE_LIMIT_BUFFER = Decimal("0.80")
+        BINANCE_PUBLIC_BASE_URL = "https://data-api.binance.vision"
+
+    monkeypatch.setattr("binance_client.Client", FakeClient)
+    client = BinanceClient("", "", Config)
+    assert client.use_public_rest is True
+    assert client.public_base_url == "https://data-api.binance.vision"

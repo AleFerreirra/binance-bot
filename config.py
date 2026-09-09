@@ -91,6 +91,7 @@ class Config:
     KILL_SWITCH_FILE = os.getenv("KILL_SWITCH_FILE", "KILL_SWITCH")
     HEALTH_CHECK_FILE = os.getenv("HEALTH_CHECK_FILE", "health_check.json")
     DASHBOARD_PORT = _int_env("DASHBOARD_PORT", 8765)
+    BINANCE_PUBLIC_BASE_URL = os.getenv("BINANCE_PUBLIC_BASE_URL", "https://api.binance.com").rstrip("/")
 
     WATCHLIST_SYMBOLS = [
         item.strip().upper()

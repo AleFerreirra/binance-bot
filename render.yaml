@@ -27,6 +27,8 @@ services:
         value: 5m
       - key: CHECK_INTERVAL
         value: "180"
+      - key: BINANCE_PUBLIC_BASE_URL
+        value: https://data-api.binance.vision
       - key: BINANCE_API_KEY
         sync: false
       - key: BINANCE_API_SECRET
@@ -59,6 +61,8 @@ services:
         value: 5m
       - key: CHECK_INTERVAL
         value: "180"
+      - key: BINANCE_PUBLIC_BASE_URL
+        value: https://data-api.binance.vision
       - key: BINANCE_API_KEY
         sync: false
       - key: BINANCE_API_SECRET

@@ -6,10 +6,11 @@ from decimal import Decimal, ROUND_DOWN
 from typing import Any, Callable, Dict
 
 import pandas as pd
+import requests
 from binance.client import Client
 from binance.exceptions import BinanceAPIException, BinanceRequestException
 from requests.exceptions import ConnectionError as RequestsConnectionError
-from requests.exceptions import Timeout
+from requests.exceptions import RequestException, Timeout
 
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,9 @@ class BinanceClient:
         self.config = config
         requests_params = {"timeout": getattr(config, "API_TIMEOUT", 20)}
         self.client = Client(api_key or None, api_secret or None, requests_params=requests_params)
+        self.public_base_url = str(getattr(config, "BINANCE_PUBLIC_BASE_URL", "https://api.binance.com")).rstrip("/")
+        self.use_public_rest = self.public_base_url != "https://api.binance.com"
+        self.session = requests.Session()
         self.max_retries = int(getattr(config, "MAX_API_RETRIES", 5))
         self.retry_delay = Decimal(str(getattr(config, "API_RETRY_DELAY", "1")))
         self.weight_limit = int(getattr(config, "API_RATE_LIMIT_WEIGHT", 1200))
@@ -48,8 +52,11 @@ class BinanceClient:
         self._used_weight = 0
         self._filters: Dict[str, SymbolFilters] = {}
         self.time_offset_ms = 0
-        self.sync_time()
-        self.test_connection()
+        if self.use_public_rest:
+            logger.info("[BINANCE] usando REST publico alternativo", extra={"base_url": self.public_base_url})
+        else:
+            self.sync_time()
+            self.test_connection()
 
     def _consume_weight(self, weight: int) -> None:
         now = time.monotonic()
@@ -82,12 +89,22 @@ class BinanceClient:
                     time.sleep(delay)
                     continue
                 raise
-            except (BinanceRequestException, Timeout, RequestsConnectionError, socket.timeout) as exc:
+            except (BinanceRequestException, RequestException, Timeout, RequestsConnectionError, socket.timeout) as exc:
                 last_error = exc
                 delay = float(self.retry_delay * (Decimal(2) ** Decimal(attempt - 1)))
                 logger.warning("[BINANCE] erro de rede em %s; nova tentativa em %.1fs: %s", name, delay, exc)
                 time.sleep(delay)
         raise RuntimeError(f"chamada Binance falhou apos todas as tentativas: {name}: {last_error}")
+
+    def _public_get(self, path: str, **params) -> Any:
+        url = f"{self.public_base_url}{path}"
+
+        def request():
+            response = self.session.get(url, params=params, timeout=int(getattr(self.config, "API_TIMEOUT", 20)))
+            response.raise_for_status()
+            return response.json() if response.content else {}
+
+        return self._call("klines", request)
 
     def sync_time(self) -> None:
         server = self._call("time", self.client.get_server_time)
@@ -152,10 +169,21 @@ class BinanceClient:
             raise ValueError(f"valor nocional {notional} abaixo do minimo minNotional {filters.min_notional}")
 
     def get_current_price(self, symbol: str) -> Decimal:
+        if self.use_public_rest:
+            ticker = self._public_get("/api/v3/ticker/price", symbol=symbol)
+            return Decimal(ticker["price"])
         ticker = self._call("ticker", self.client.get_symbol_ticker, symbol=symbol)
         return Decimal(ticker["price"])
 
     def get_book_ticker(self, symbol: str) -> Dict[str, Decimal]:
+        if self.use_public_rest:
+            book = self._public_get("/api/v3/ticker/bookTicker", symbol=symbol)
+            return {
+                "bid": Decimal(book["bidPrice"]),
+                "ask": Decimal(book["askPrice"]),
+                "bid_qty": Decimal(book["bidQty"]),
+                "ask_qty": Decimal(book["askQty"]),
+            }
         book = self._call("book_ticker", self.client.get_orderbook_ticker, symbol=symbol)
         return {
             "bid": Decimal(book["bidPrice"]),
@@ -171,7 +199,10 @@ class BinanceClient:
 
     def get_klines(self, symbol: str, interval: str, limit: int = 250,
                    closed_only: bool = True) -> pd.DataFrame:
-        klines = self._call("klines", self.client.get_klines, symbol=symbol, interval=interval, limit=limit)
+        if self.use_public_rest:
+            klines = self._public_get("/api/v3/klines", symbol=symbol, interval=interval, limit=limit)
+        else:
+            klines = self._call("klines", self.client.get_klines, symbol=symbol, interval=interval, limit=limit)
         df = pd.DataFrame(klines, columns=[
             "timestamp", "open", "high", "low", "close", "volume",
             "close_time", "quote_asset_volume", "number_of_trades",
