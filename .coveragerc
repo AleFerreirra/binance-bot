@@ -1,0 +1,21 @@
+[run]
+source =
+    indicators
+    risk_manager
+omit =
+    tests/*
+    binance_client.py
+    compare_symbols.py
+    config.py
+    database.py
+    diagnostic.py
+    check_limits.py
+    main.py
+    notifications.py
+    reconciliation.py
+    logging_utils.py
+    strategy.py
+
+[report]
+show_missing = True
+fail_under = 80

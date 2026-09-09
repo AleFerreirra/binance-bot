@@ -1,0 +1,10 @@
+binance_bot/
+├── .env
+├── config.py
+├── indicators.py
+├── strategy.py
+├── binance_client.py
+├── main.py
+├── diagnostic.py
+├── check_limits.py
+└── requirements.txt

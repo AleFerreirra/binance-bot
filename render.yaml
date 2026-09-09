@@ -1,0 +1,65 @@
+services:
+  - type: web
+    name: binance-bot-dashboard
+    env: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: python analysis_api.py
+    healthCheckPath: /health
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: TRADING_MODE
+        value: analysis_only
+      - key: PAPER_TRADING
+        value: "false"
+      - key: SYMBOLS
+        value: BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT
+      - key: WATCHLIST_SYMBOLS
+        value: BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT
+      - key: SETUP_TIMEFRAME
+        value: 15m
+      - key: CONTEXT_TIMEFRAME
+        value: 4h
+      - key: CONFIRMATION_TIMEFRAME
+        value: 1h
+      - key: REFINEMENT_TIMEFRAME
+        value: 5m
+      - key: CHECK_INTERVAL
+        value: "180"
+      - key: BINANCE_API_KEY
+        sync: false
+      - key: BINANCE_API_SECRET
+        sync: false
+
+  - type: worker
+    name: binance-bot-worker
+    env: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: TRADING_MODE
+        value: analysis_only
+      - key: PAPER_TRADING
+        value: "false"
+      - key: SYMBOLS
+        value: BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT
+      - key: WATCHLIST_SYMBOLS
+        value: BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT
+      - key: SETUP_TIMEFRAME
+        value: 15m
+      - key: CONTEXT_TIMEFRAME
+        value: 4h
+      - key: CONFIRMATION_TIMEFRAME
+        value: 1h
+      - key: REFINEMENT_TIMEFRAME
+        value: 5m
+      - key: CHECK_INTERVAL
+        value: "180"
+      - key: BINANCE_API_KEY
+        sync: false
+      - key: BINANCE_API_SECRET
+        sync: false

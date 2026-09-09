@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Analisador de Mercado Binance</title>
+    <link rel="stylesheet" href="./styles.css" />
+    <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Inteligência de mercado somente leitura</p>
+          <h1>Analisador de Mercado Binance</h1>
+        </div>
+        <div class="connection-pill" id="connectionStatus" data-state="loading">
+          <span></span>
+          <strong>Carregando</strong>
+        </div>
+      </header>
+
+      <section class="control-strip" aria-label="Filtros do dashboard">
+        <label>
+          Paridade
+          <select id="symbolSelect">
+            <option value="BTCUSDT" selected>BTCUSDT - Bitcoin / Tether</option>
+            <option value="ETHUSDT">ETHUSDT - Ethereum / Tether</option>
+            <option value="BNBUSDT">BNBUSDT - Binance Coin / Tether</option>
+            <option value="SOLUSDT">SOLUSDT - Solana / Tether</option>
+            <option value="XRPUSDT">XRPUSDT - XRP / Tether</option>
+            <option value="EUR/USD">EUR/USD - Euro / Dólar Americano</option>
+            <option value="USD/JPY">USD/JPY - Dólar Americano / Iene Japonês</option>
+            <option value="GBP/USD">GBP/USD - Libra Esterlina / Dólar Americano</option>
+          </select>
+        </label>
+        <label>
+          Período
+          <select id="timeframeSelect">
+            <option value="5m">5m</option>
+            <option value="15m" selected>15m</option>
+            <option value="1h">1h</option>
+            <option value="4h">4h</option>
+          </select>
+        </label>
+        <label>
+          Pontuação mínima
+          <input id="scoreFilter" type="range" min="0" max="100" step="5" value="0" />
+          <span id="scoreFilterValue">0</span>
+        </label>
+        <label>
+          Sinal
+          <select id="signalFilter">
+            <option value="ALL">Todos</option>
+            <option value="LONG_SETUP">Compra</option>
+            <option value="SHORT_SETUP">Venda</option>
+            <option value="WAIT">Aguardar</option>
+            <option value="INVALIDATED">Invalidado</option>
+          </select>
+        </label>
+        <label class="switch">
+          <input id="demoToggle" type="checkbox" />
+          <span></span>
+          DEMO
+        </label>
+      </section>
+
+      <main>
+        <section class="market-overview" aria-label="Resumo de mercado">
+          <article>
+            <span>Símbolo</span>
+            <strong id="symbolLabel">BTCUSDT</strong>
+          </article>
+          <article>
+            <span>Preço atual</span>
+            <strong id="priceLabel">--</strong>
+          </article>
+          <article>
+            <span>Variação</span>
+            <strong id="changeLabel">--</strong>
+          </article>
+          <article>
+            <span>Max / Min</span>
+            <strong id="rangeLabel">--</strong>
+          </article>
+          <article>
+            <span>Volume</span>
+            <strong id="volumeLabel">--</strong>
+          </article>
+          <article>
+            <span>Última atualização</span>
+            <strong id="updatedLabel">--</strong>
+          </article>
+        </section>
+
+        <section class="clock-panel" aria-label="Relogio de mercado">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Relógio de mercado</p>
+              <h2>Sessões e horários</h2>
+            </div>
+            <strong id="localClock">--</strong>
+          </div>
+          <div id="clockGrid" class="clock-grid"></div>
+        </section>
+
+        <section class="workspace">
+          <div class="chart-panel">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Candles, EMAs, volume e níveis</p>
+                <h2 id="chartTitle">BTCUSDT - 15m</h2>
+            </div>
+            <div id="uiState" class="state-badge">Carregando</div>
+          </div>
+          <div id="chartNotice" class="chart-notice" hidden></div>
+          <div id="chart" class="chart"></div>
+        </div>
+
+          <aside class="decision-panel" aria-label="Painel de decisao">
+            <div id="alertBanner" class="alert-banner" hidden></div>
+            <div class="decision-head">
+              <span>Decisão atual</span>
+              <strong id="decisionLabel">AGUARDAR</strong>
+            </div>
+            <div class="score-ring" id="scoreRing" style="--score: 0">
+              <strong id="scoreLabel">0</strong>
+              <span>/100</span>
+            </div>
+            <p id="waitMessage" class="wait-message">AGUARDAR — não há entrada válida neste momento</p>
+
+            <dl class="signal-grid">
+              <div><dt>4h</dt><dd id="trend4h">--</dd></div>
+              <div><dt>1h</dt><dd id="trend1h">--</dd></div>
+              <div><dt>15m</dt><dd id="trend15m">--</dd></div>
+              <div><dt>Entrada</dt><dd id="entryLabel">--</dd></div>
+              <div><dt>Stop</dt><dd id="stopLabel">--</dd></div>
+              <div><dt>Ganho %</dt><dd id="gainPercentLabel">--</dd></div>
+              <div><dt>Stop %</dt><dd id="stopPercentLabel">--</dd></div>
+              <div><dt>Alvos</dt><dd id="targetsLabel">--</dd></div>
+              <div><dt>R/R</dt><dd id="rrLabel">--</dd></div>
+            </dl>
+
+            <div class="text-block">
+              <h3>Justificativa técnica</h3>
+              <ul id="reasonsList"></ul>
+            </div>
+            <div class="text-block">
+              <h3>Condições para entrada</h3>
+              <ul id="prereqList"></ul>
+            </div>
+            <div class="text-block">
+              <h3>Invalidação</h3>
+              <ul id="cancelList"></ul>
+            </div>
+          </aside>
+        </section>
+
+        <section class="metric-cards" aria-label="Indicadores visuais">
+          <article><span>Tendência</span><strong id="trendCard">--</strong></article>
+          <article><span>Força</span><strong id="strengthCard">--</strong></article>
+          <article><span>Volume</span><strong id="volumeCard">--</strong></article>
+          <article><span>Volatilidade</span><strong id="volatilityCard">--</strong></article>
+          <article><span>Suporte</span><strong id="supportCard">--</strong></article>
+          <article><span>Resistência</span><strong id="resistanceCard">--</strong></article>
+          <article><span>Risco/Retorno</span><strong id="riskCard">--</strong></article>
+        </section>
+
+        <section class="history-panel">
+          <div class="panel-header">
+            <div>
+              <p class="eyebrow">Histórico local</p>
+              <h2>Sinais recentes</h2>
+            </div>
+            <button id="clearHistoryButton" type="button">Limpar</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Data e hora</th>
+                  <th>Ativo</th>
+                  <th>Período</th>
+                  <th>Sinal</th>
+                  <th>Preço</th>
+                  <th>Entrada</th>
+                  <th>Stop</th>
+                  <th>Ganho %</th>
+                  <th>Stop %</th>
+                  <th>Alvos</th>
+                  <th>Pontuação</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="historyBody"></tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <template id="emptyRowTemplate">
+      <tr><td colspan="12">Nenhum sinal dentro dos filtros atuais.</td></tr>
+    </template>
+    <script type="module" src="./js/ui.js"></script>
+  </body>
+</html>
