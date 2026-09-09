@@ -40,8 +40,8 @@ class AnalysisHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         parsed = urlparse(self.path)
-        if parsed.path == "/health":
-            self.send_json({"status": "ok", "mode": Config.TRADING_MODE})
+        if parsed.path in {"/health", "/healthz", "/api/health"}:
+            self.handle_health()
             return
         if parsed.path == "/api/signal":
             self.handle_signal(parsed.query)
@@ -61,6 +61,13 @@ class AnalysisHandler(SimpleHTTPRequestHandler):
         if parsed.path == "/":
             self.path = "/index.html"
         super().do_GET()
+
+    def handle_health(self):
+        self.send_json({
+            "status": "ok",
+            "mode": Config.TRADING_MODE,
+            "service": "binance-bot-dashboard",
+        })
 
     def do_OPTIONS(self):
         """Handle CORS preflight requests."""
