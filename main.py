@@ -68,6 +68,7 @@ class AnalysisBot:
             results.append(payload)
             logger.info("[ANALISE] sinal gerado", extra=payload)
             self.notifier.market_signal(signal_result)
+            self.notifier.zone_alert(signal_result)
         return results
 
     def analyze_symbol(self, symbol: str) -> MarketSignal:

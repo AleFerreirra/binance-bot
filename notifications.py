@@ -94,6 +94,33 @@ class Notifier:
         )
         self.alert("SIGNAL", f"Sinal {data['decisao']}", text)
 
+    def zone_alert(self, signal) -> None:
+        """Dispatch zone alerts (HOT_ZONE, REJECTION, STOP_HUNT, MICRO_BREAKOUT)
+        independently of the signal decision. This ensures zone proximity
+        and rejection events reach Telegram even when decision is WAIT."""
+        if not signal.alert_type:
+            return
+        now = time.time()
+        alert_key = f"zone:{signal.symbol}:{signal.alert_type}:{signal.alert_direction}"
+        with self._lock:
+            if now - self._last_sent.get(alert_key, 0) < self._signal_cooldown:
+                return
+            self._last_sent[alert_key] = now
+        emoji = {
+            "HOT_ZONE": "\U0001f7e1",
+            "REJECTION": "\U0001f534",
+            "MICRO_BREAKOUT": "\U0001f7e2",
+            "STOP_HUNT": "\u26a0\ufe0f",
+        }
+        text = (
+            f"{emoji.get(signal.alert_type, '\U0001f4cd')} {signal.alert_type}\n"
+            f"{signal.symbol} — {signal.alert_message}\n"
+            f"Preco: {signal.current_price}\n"
+            f"Direcao: {signal.alert_direction}\n"
+            f"Score: {signal.score}/100"
+        )
+        self.alert("HIGH", f"Zona {signal.alert_type}", text)
+
     def trade_opened(self, symbol: str, side: str, quantity: str,
                      entry_price: str, stop_loss: str, take_profit: str,
                      regime: str = "", confidence: float = 0.0) -> None:

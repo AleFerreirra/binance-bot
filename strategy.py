@@ -155,11 +155,17 @@ class MarketAnalyzer:
             return continuation_signal
 
         if self._has_major_conflict():
+            if zone_alert and zone_alert["priority"] >= 2:
+                return self._wait(price, timestamp, trends, dominant,
+                                 ["conflito entre periodos — alerta de zona ativo"], zone_alert)
             return self._wait(price, timestamp, trends, dominant, ["conflito relevante entre periodos"], zone_alert)
 
-        if score_long >= score_short and score_long >= 70:
+        setup_regime = str(self.analyses[self.timeframes["setup"]].indicators.get("market_regime", "ranging"))
+        score_threshold = 60 if setup_regime in ("ranging", "volatile") else 70
+
+        if score_long >= score_short and score_long >= score_threshold:
             signal = self._build_directional_signal(AnalysisDecision.LONG_SETUP, price, timestamp, trends, score_long, long_reasons)
-        elif score_short > score_long and score_short >= 70:
+        elif score_short > score_long and score_short >= score_threshold:
             signal = self._build_directional_signal(AnalysisDecision.SHORT_SETUP, price, timestamp, trends, score_short, short_reasons)
         else:
             return self._wait(price, timestamp, trends, dominant, long_reasons + short_reasons or ["sem confirmacao suficiente"], zone_alert)
@@ -280,12 +286,21 @@ class MarketAnalyzer:
             reasons.append(f"{setup.timeframe} confirma a direcao")
 
         poc_bias = str(ind.get("poc_bias", "neutro"))
+        poc_short_bias = str(ind.get("poc_short_bias", "neutro"))
         if (direction == Trend.BULLISH and poc_bias == "altista") or (direction == Trend.BEARISH and poc_bias == "baixista"):
             score += 8
             reasons.append(f"POC 24h confirma vies {poc_bias}")
         elif (direction == Trend.BULLISH and poc_bias == "baixista") or (direction == Trend.BEARISH and poc_bias == "altista"):
             score -= 8
             reasons.append("POC 24h contra a direcao")
+
+        # POC 6h (short-term flow) as secondary bias confirmation
+        if (direction == Trend.BULLISH and poc_short_bias == "altista") or (direction == Trend.BEARISH and poc_short_bias == "baixista"):
+            score += 5
+            reasons.append(f"POC 6h confirma vies {poc_short_bias}")
+        elif (direction == Trend.BULLISH and poc_short_bias == "baixista") or (direction == Trend.BEARISH and poc_short_bias == "altista"):
+            score -= 5
+            reasons.append("POC 6h contra a direcao")
 
         # Confluence bonus: when 3+ timeframes agree, double the base weight
         if aligned_count >= 3:
@@ -528,10 +543,16 @@ class MarketAnalyzer:
         atr = Decimal(str(setup_ind.get("atr", 0))) or price * Decimal("0.01")
         volume = Decimal(str(candle["volume"]))
         volume_sma = Decimal(str(setup_ind.get("volume_sma", 1))) or Decimal("1")
-        body = abs(Decimal(str(candle["close"])) - Decimal(str(candle["open"])))
-        upper_wick = Decimal(str(candle["high"])) - max(Decimal(str(candle["close"])), Decimal(str(candle["open"])))
-        lower_wick = min(Decimal(str(candle["close"])), Decimal(str(candle["open"]))) - Decimal(str(candle["low"]))
-        alerts = []
+        # 5-candle volume average for rejection confirmation
+        vol_5 = Decimal(str(setup_df["volume"].tail(5).mean()))
+        close = Decimal(str(candle["close"]))
+        open_ = Decimal(str(candle["open"]))
+        high = Decimal(str(candle["high"]))
+        low = Decimal(str(candle["low"]))
+        body = abs(close - open_)
+        upper_wick = high - max(close, open_)
+        lower_wick = min(close, open_) - low
+        alerts: List[Dict] = []
         for kind, zone, direction, label in (
             ("supply", setup_ind.get("nearest_supply_zone"), "venda", "Supply"),
             ("demand", setup_ind.get("nearest_demand_zone"), "compra", "Demand"),
@@ -540,19 +561,53 @@ class MarketAnalyzer:
                 continue
             lower = Decimal(str(zone["lower"]))
             upper = Decimal(str(zone["upper"]))
-            center = Decimal(str(zone["center"]))
-            distance = min(abs(price - lower), abs(price - upper), abs(price - center))
-            touched = Decimal(str(candle["low"])) <= upper and Decimal(str(candle["high"])) >= lower
-            if kind == "supply" and Decimal(str(candle["close"])) > upper and volume > volume_sma * Decimal("1.3"):
-                alerts.append(self._alert_payload("MICRO_BREAKOUT", "ROMPEU ZONA - Entre no sentido do rompimento com stop na borda oposta", "compra", zone, 3))
-            elif kind == "demand" and Decimal(str(candle["close"])) < lower and volume > volume_sma * Decimal("1.3"):
-                alerts.append(self._alert_payload("MICRO_BREAKOUT", "ROMPEU ZONA - Entre no sentido do rompimento com stop na borda oposta", "venda", zone, 3))
-            if touched and kind == "supply" and upper_wick > body * Decimal("0.5"):
-                alerts.append(self._alert_payload("REJECTION", "REJEIÇÃO CONFIRMADA - Entre na direção contrária à zona", "venda", zone, 2))
-            elif touched and kind == "demand" and lower_wick > body * Decimal("0.5"):
-                alerts.append(self._alert_payload("REJECTION", "REJEIÇÃO CONFIRMADA - Entre na direção contrária à zona", "compra", zone, 2))
+            distance = min(abs(price - lower), abs(price - upper))
+            touched = low <= upper and high >= lower
+
+            # ═══ MICRO_BREAKOUT: closes beyond zone with volume > 1.3x mean ═══
+            if kind == "supply" and close > upper and volume > volume_sma * Decimal("1.3"):
+                alerts.append(self._alert_payload(
+                    "MICRO_BREAKOUT",
+                    "\U0001f7e2 ROMPEU COM FORCA — Entrada a favor do rompimento, stop na borda oposta",
+                    "compra", zone, 3))
+            elif kind == "demand" and close < lower and volume > volume_sma * Decimal("1.3"):
+                alerts.append(self._alert_payload(
+                    "MICRO_BREAKOUT",
+                    "\U0001f7e2 ROMPEU COM FORCA — Entrada a favor do rompimento, stop na borda oposta",
+                    "venda", zone, 3))
+
+            # ═══ STOP_HUNT: wick beyond zone but close back inside ═══
+            if kind == "supply" and high > upper and close <= upper and close >= lower:
+                if volume > volume_sma * Decimal("1.2"):
+                    alerts.append(self._alert_payload(
+                        "STOP_HUNT",
+                        "\u26a0\ufe0f FALSO ROMPIMENTO — Preco rompeu e voltou. Aguardar confirmacao contraria",
+                        "venda", zone, 4))
+            elif kind == "demand" and low < lower and close >= lower and close <= upper:
+                if volume > volume_sma * Decimal("1.2"):
+                    alerts.append(self._alert_payload(
+                        "STOP_HUNT",
+                        "\u26a0\ufe0f FALSO ROMPIMENTO — Preco rompeu e voltou. Aguardar confirmacao contraria",
+                        "compra", zone, 4))
+
+            # ═══ REJECTION: touches zone edge, wick > 50% body, volume > 5-candle avg ═══
+            if touched and kind == "supply" and upper_wick > body * Decimal("0.5") and volume > vol_5:
+                alerts.append(self._alert_payload(
+                    "REJECTION",
+                    "\U0001f534 REJEICAO CONFIRMADA — Pavio longo + volume. Prepare short",
+                    "venda", zone, 2))
+            elif touched and kind == "demand" and lower_wick > body * Decimal("0.5") and volume > vol_5:
+                alerts.append(self._alert_payload(
+                    "REJECTION",
+                    "\U0001f534 REJEICAO CONFIRMADA — Pavio longo + volume. Prepare long",
+                    "compra", zone, 2))
+
+            # ═══ HOT_ZONE: price within 0.3 ATR of zone edge ═══
             if distance <= atr * Decimal("0.3"):
-                alerts.append(self._alert_payload("HOT_ZONE", "ZONA QUENTE - Prepare entrada", direction, zone, 1, label))
+                alerts.append(self._alert_payload(
+                    "HOT_ZONE",
+                    f"\U0001f7e1 ZONA QUENTE — A {float(distance):.0f} pts da borda. Prepare entrada",
+                    direction, zone, 1, label))
         if not alerts:
             return None
         return max(alerts, key=lambda item: item["priority"])

@@ -34,8 +34,9 @@ export function buildAnalysis(symbol, timeframe, candlesByTimeframe, options = {
   const spread = options.spread ?? 0;
   const minScore = options.minScore ?? 0;
   const zoneAlert = zoneAlertSignal(setupCandles, ind);
+  const progressive = calculateProgressiveScore(setupCandles, ind, options);
   const filters = marketFilters(ind, spread, options);
-  if (filters.length) return waitSignal(symbol, timeframe, setupCandles, filters.join("; "), trends, ind, zoneAlert);
+  if (filters.length) return waitSignal(symbol, timeframe, setupCandles, filters.join("; "), trends, ind, zoneAlert, progressive);
 
   const reversalSignal = reversalZoneSignal(symbol, timeframe, setupCandles, trends, setup, ind, options, zoneAlert);
   if (reversalSignal) return reversalSignal;
@@ -44,7 +45,7 @@ export function buildAnalysis(symbol, timeframe, candlesByTimeframe, options = {
   if (continuationSignal) return continuationSignal;
 
   if (hasConflict(trends, setup.trend)) {
-    return waitSignal(symbol, timeframe, setupCandles, "conflito relevante entre períodos", trends, ind, zoneAlert);
+    return waitSignal(symbol, timeframe, setupCandles, "conflito relevante entre períodos", trends, ind, zoneAlert, progressive);
   }
 
   const long = directionScore("compra", trends, setup, options);
@@ -55,13 +56,13 @@ export function buildAnalysis(symbol, timeframe, candlesByTimeframe, options = {
   } else if (short.score > long.score && short.score >= 70) {
     signal = createDirectional("SHORT_SETUP", symbol, timeframe, setupCandles, trends, ind, short, options);
   } else {
-    return waitSignal(symbol, timeframe, setupCandles, "AGUARDAR - não há entrada válida neste momento", trends, ind, zoneAlert);
+    return waitSignal(symbol, timeframe, setupCandles, "AGUARDAR - não há entrada válida neste momento", trends, ind, zoneAlert, progressive);
   }
   if (signal.score < minScore) {
-    signal = waitSignal(symbol, timeframe, setupCandles, "pontuação abaixo do filtro", trends, ind, zoneAlert);
+    signal = waitSignal(symbol, timeframe, setupCandles, "pontuação abaixo do filtro", trends, ind, zoneAlert, progressive);
   }
   if (signal.riskReward < 2 && signal.decision !== "WAIT") {
-    signal = waitSignal(symbol, timeframe, setupCandles, "relação risco/retorno inferior a 1:2", trends, ind, zoneAlert);
+    signal = waitSignal(symbol, timeframe, setupCandles, "relação risco/retorno inferior a 1:2", trends, ind, zoneAlert, progressive);
   }
   if (zoneAlert) signal = { ...signal, ...zoneAlert };
   return signal;
@@ -69,12 +70,31 @@ export function buildAnalysis(symbol, timeframe, candlesByTimeframe, options = {
 
 export function classifyTrend(candles, indicators = calculateIndicators(candles)) {
   const close = last(candles).close;
+  const strongMove = strongAtrMove(candles, indicators.atr || close * 0.01);
+  if (strongMove) return strongMove;
   const ema21 = last(indicators.ema21);
   const ema50 = last(indicators.ema50);
   const ema200 = last(indicators.ema200);
   if (close > ema21 && ema21 > ema50 && close > ema200 && indicators.macd.histogram >= 0) return "bullish";
   if (close < ema21 && ema21 < ema50 && close < ema200 && indicators.macd.histogram <= 0) return "bearish";
   return "sideways";
+}
+
+function strongAtrMove(candles, atrValue) {
+  const recent = candles.slice(-8);
+  if (recent.length < 2 || !Number.isFinite(atrValue) || atrValue <= 0) return null;
+  const first = recent[0].close;
+  const current = last(recent).close;
+  const move = current - first;
+  if (move <= -2 * atrValue) return "bearish_strong";
+  if (move >= 2 * atrValue) return "bullish_strong";
+  return null;
+}
+
+function normalizeTrend(trend) {
+  if (trend === "bullish_strong") return "bullish";
+  if (trend === "bearish_strong") return "bearish";
+  return trend;
 }
 
 export function directionScore(direction, trends, setup, options = {}) {
@@ -89,15 +109,15 @@ export function directionScore(direction, trends, setup, options = {}) {
   // Multi-timeframe alignment (0-55 base)
   let alignedCount = 0;
   for (const tf of ["4h", "1h"]) {
-    if (trends[tf] === wanted) {
+    if (normalizeTrend(trends[tf]) === wanted) {
       score += 22;
       alignedCount += 1;
       reasons.push(`${tf} alinhado com tendência de ${wantedLabel}`);
-    } else if (trends[tf] === "sideways") {
+    } else if (normalizeTrend(trends[tf]) === "sideways") {
       score += 6;
     }
   }
-  if (setup.trend === wanted) {
+  if (normalizeTrend(setup.trend) === wanted) {
     score += 16;
     alignedCount += 1;
     reasons.push("período de configuração confirma a direção");
@@ -375,7 +395,9 @@ function breakdownContinuationSignal(symbol, timeframe, candles, trends, setup, 
 }
 
 function isContinuationContext(trends, setupTrend, wanted) {
-  return setupTrend === wanted && trends["1h"] === wanted && trends["4h"] === wanted;
+  return normalizeTrend(setupTrend) === wanted
+    && normalizeTrend(trends["1h"]) === wanted
+    && normalizeTrend(trends["4h"]) === wanted;
 }
 
 function isDemandRejection(candle, indicators, demandZone) {
@@ -400,7 +422,7 @@ function fallbackZone(center, atrVal, type) {
 function generateNarrative(decision, symbol, price, trends, scored, ind, confidence, trendStr, momentum, regime) {
   const dir = decision === "LONG_SETUP" ? "alta" : "baixa";
   const dirLabel = decision === "LONG_SETUP" ? "compra" : "venda";
-  const aligned = Object.values(trends).filter((t) => t === (dir === "alta" ? "bullish" : "bearish")).length;
+  const aligned = Object.values(trends).filter((t) => normalizeTrend(t) === (dir === "alta" ? "bullish" : "bearish")).length;
   const total = Object.keys(trends).length;
   const rsiVal = ind.rsi ?? 50;
   const adxVal = ind.adx ?? 20;
@@ -436,9 +458,12 @@ export function marketFilters(indicators, spread, options = {}) {
 }
 
 export function hasConflict(trends, setupTrend) {
-  return (trends["4h"] === "bullish" && trends["1h"] === "bearish")
-    || (trends["4h"] === "bearish" && trends["1h"] === "bullish")
-    || (trends["4h"] !== "sideways" && setupTrend !== "sideways" && trends["4h"] !== setupTrend);
+  const trend4h = normalizeTrend(trends["4h"]);
+  const trend1h = normalizeTrend(trends["1h"]);
+  const setup = normalizeTrend(setupTrend);
+  return (trend4h === "bullish" && trend1h === "bearish")
+    || (trend4h === "bearish" && trend1h === "bullish")
+    || (trend4h !== "sideways" && setup !== "sideways" && trend4h !== setup);
 }
 
 function zoneAlertSignal(candles, indicators) {
@@ -451,6 +476,8 @@ function zoneAlertSignal(candles, indicators) {
   const upperWick = candle.high - Math.max(candle.close, candle.open);
   const lowerWick = Math.min(candle.close, candle.open) - candle.low;
   const alerts = [];
+  const approach = verificarAproximacaoZona(candles, indicators);
+  if (approach) alerts.push(approach);
   for (const item of [
     { kind: "supply", zone: indicators.resistanceZone, direction: "venda", label: "Supply" },
     { kind: "demand", zone: indicators.supportZone, direction: "compra", label: "Demand" },
@@ -469,11 +496,98 @@ function zoneAlertSignal(candles, indicators) {
     } else if (touched && kind === "demand" && lowerWick > body * 0.5) {
       alerts.push(alertPayload("REJECTION", "REJEIÇÃO CONFIRMADA - Entre na direção contrária à zona", "compra", zone, 2));
     }
-    if (distance <= atrVal * 0.3) {
+    if (distance <= atrVal * 0.5) {
       alerts.push(alertPayload("HOT_ZONE", "ZONA QUENTE - Prepare entrada", direction, zone, 1, label));
     }
   }
   return alerts.sort((a, b) => b.alertPriority - a.alertPriority)[0] ?? null;
+}
+
+export function verificarAproximacaoZona(candles, indicators, thresholdAtr = 0.5) {
+  const candle = last(candles);
+  if (!candle) return null;
+  const atrVal = indicators.atr || candle.close * 0.01;
+  const demand = indicators.supportZone;
+  const supply = indicators.resistanceZone;
+  const demandDistance = demand ? Math.abs(candle.close - demand.upper) : Number.POSITIVE_INFINITY;
+  const supplyDistance = supply ? Math.abs(candle.close - supply.lower) : Number.POSITIVE_INFINITY;
+  const threshold = atrVal * thresholdAtr;
+  if (demand && demandDistance <= threshold && candle.close >= demand.upper) {
+    return alertPayload(
+      "HOT_ZONE",
+      `ZONA QUENTE - Prepare COMPRA na região de ${demand.upper.toFixed(2)}. Aguarde vela de rejeição.`,
+      "compra",
+      demand,
+      1.5,
+      "Demand",
+    );
+  }
+  if (supply && supplyDistance <= threshold && candle.close <= supply.lower) {
+    return alertPayload(
+      "HOT_ZONE",
+      `ZONA QUENTE - Prepare VENDA na região de ${supply.lower.toFixed(2)}. Aguarde vela de rejeição.`,
+      "venda",
+      supply,
+      1.5,
+      "Supply",
+    );
+  }
+  return null;
+}
+
+export function calculateProgressiveScore(candles, indicators, options = {}) {
+  const candle = last(candles);
+  if (!candle) return { score: 0, phaseLabel: "AGUARDAR", phase: "wait", reasons: ["sem candles suficientes"] };
+  const atrVal = indicators.atr || candle.close * 0.01;
+  const nearest = nearestZoneDistance(candle.close, indicators);
+  const distanceScore = nearest.distance <= atrVal * 0.5
+    ? 35
+    : nearest.distance <= atrVal
+      ? 25
+      : nearest.distance <= atrVal * 2
+        ? 10
+        : 0;
+  const volumeRatio = indicators.volumeRatio ?? 1;
+  const volumeScore = volumeRatio >= 1.3 ? 20 : volumeRatio >= 1 ? 14 : volumeRatio >= 0.8 ? 8 : 0;
+  const pocBias = options.useShortPoc ? indicators.pocShortBias : indicators.pocBias;
+  const pocScore = nearest.kind === "demand" && pocBias === "altista" ? 15
+    : nearest.kind === "supply" && pocBias === "baixista" ? 15
+      : pocBias === "neutro" ? 6 : 0;
+  const candleScore = candlePatternScore(candles, indicators, nearest.kind);
+  const score = Math.min(100, Math.round(distanceScore + volumeScore + pocScore + candleScore));
+  return {
+    score,
+    phase: score >= 85 ? "entry" : score >= 60 ? "hot" : score >= 30 ? "prepare" : "wait",
+    phaseLabel: score >= 85 ? "ENTRADA VÁLIDA" : score >= 60 ? "ZONA QUENTE" : score >= 30 ? "PREPARE-SE" : "AGUARDAR",
+    reasons: [
+      `distância da zona: ${distanceScore}/35`,
+      `volume: ${volumeScore}/20`,
+      `alinhamento com POC: ${pocScore}/15`,
+      `padrão de vela: ${candleScore}/30`,
+    ],
+  };
+}
+
+function nearestZoneDistance(price, indicators) {
+  const demandDistance = indicators.supportZone ? Math.abs(price - indicators.supportZone.upper) : Number.POSITIVE_INFINITY;
+  const supplyDistance = indicators.resistanceZone ? Math.abs(price - indicators.resistanceZone.lower) : Number.POSITIVE_INFINITY;
+  return demandDistance <= supplyDistance
+    ? { kind: "demand", distance: demandDistance }
+    : { kind: "supply", distance: supplyDistance };
+}
+
+function candlePatternScore(candles, indicators, nearestKind) {
+  const candle = last(candles);
+  const body = Math.max(Math.abs(candle.close - candle.open), 1e-9);
+  const lowerWick = Math.min(candle.close, candle.open) - candle.low;
+  const upperWick = candle.high - Math.max(candle.close, candle.open);
+  const patterns = indicators.candlePatterns?.patterns ?? [];
+  const bullishRejection = nearestKind === "demand" && lowerWick > body * 0.5;
+  const bearishRejection = nearestKind === "supply" && upperWick > body * 0.5;
+  if ((bullishRejection || bearishRejection) && (indicators.volumeRatio ?? 1) >= 1.15) return 30;
+  if (bullishRejection || bearishRejection) return 22;
+  if (patterns.length) return 10;
+  return 0;
 }
 
 function alertPayload(type, message, direction, zone, priority, label = "") {
@@ -485,8 +599,9 @@ function alertPayload(type, message, direction, zone, priority, label = "") {
   };
 }
 
-export function waitSignal(symbol, timeframe, candles, reason, trends = {}, indicators = {}, zoneAlert = null) {
+export function waitSignal(symbol, timeframe, candles, reason, trends = {}, indicators = {}, zoneAlert = null, progressive = null) {
   const current = last(candles, { close: 0, closeTime: Date.now(), time: Date.now() / 1000 });
+  const scoreState = progressive ?? calculateProgressiveScore(candles, indicators);
   const regime = indicators.regime ?? "ranging";
   const trendStr = indicators.trendStrength?.label ?? "moderada";
   const momentum = indicators.momentum ?? "estável";
@@ -497,10 +612,12 @@ export function waitSignal(symbol, timeframe, candles, reason, trends = {}, indi
     symbol,
     timeframe,
     decision: "WAIT",
-    score: 0,
+    score: scoreState.score,
+    phase: scoreState.phase,
+    phaseLabel: scoreState.phaseLabel,
     price: current.close,
     trends: { "4h": trends["4h"] ?? "sideways", "1h": trends["1h"] ?? "sideways", "15m": trends["15m"] ?? "sideways", "5m": trends["5m"] ?? "sideways" },
-    reasons: [reason],
+    reasons: [reason, ...(scoreState.reasons ?? [])],
     prerequisites: ["aguardar fechamento com confirmação de tendência, volume e risco/retorno"],
     cancelConditions: ["volume insuficiente", "conflito entre períodos", "relação risco/retorno inadequada"],
     entry: null,

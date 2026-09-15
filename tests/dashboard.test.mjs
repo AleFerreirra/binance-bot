@@ -8,7 +8,14 @@ import { createMarketChart } from "../dashboard/js/chart.js";
 import { calculateIndicators, supportResistance } from "../dashboard/js/indicators.js";
 import { getMarketClock } from "../dashboard/js/marketClock.js";
 import { closedCandles, createKlineSocket, demoForexQuotes, fetchForexQuotes, mergeCandle } from "../dashboard/js/marketData.js";
-import { buildAnalysis, createDirectional, DECISIONS } from "../dashboard/js/signalEngine.js";
+import {
+  buildAnalysis,
+  calculateProgressiveScore,
+  classifyTrend,
+  createDirectional,
+  DECISIONS,
+  verificarAproximacaoZona,
+} from "../dashboard/js/signalEngine.js";
 
 function candles(count = 260, direction = 1) {
   const rows = [];
@@ -97,10 +104,10 @@ test("websocket agenda reconexao quando desconecta", () => {
 
 test("renderizacao do grafico usa Lightweight Charts", () => {
   globalThis.window = { addEventListener() {}, removeEventListener() {} };
-  const created = { candleData: [], lineData: [] };
+  const created = { candleData: [], lineData: [], priceLines: [] };
   const fakeSeries = {
     setData(data) { created.candleData = data; },
-    createPriceLine(line) { return line; },
+    createPriceLine(line) { created.priceLines.push(line); return line; },
     removePriceLine() {},
   };
   const fakeChart = {
@@ -117,12 +124,18 @@ test("renderizacao do grafico usa Lightweight Charts", () => {
     { getBoundingClientRect: () => ({ width: 800, height: 480 }) },
     { createChart: (_container, options) => { chartOptions = options; return fakeChart; }, CrosshairMode: { Normal: 0 } },
   );
-  chart.update(candles(), { targets: [], support: 100, resistance: 200 });
+  chart.update(candles(), {
+    targets: [],
+    supportZone: { lower: 96, upper: 98 },
+    resistanceZone: { lower: 122, upper: 124 },
+    fibonacci: { zones: [{ label: "50.0%", lower: 108, upper: 110 }] },
+  });
   assert.equal(chartOptions.handleScroll.mouseWheel, true);
   assert.equal(chartOptions.handleScale.mouseWheel, true);
   assert.equal(chartOptions.handleScale.pinch, true);
   assert.ok(created.candleData.length > 0);
   assert.ok(created.lineData.length > 0);
+  assert.deepEqual(created.priceLines.map((line) => line.title).sort(), ["Demanda max", "Demanda min", "Supply max", "Supply min"]);
 });
 
 test("renderizacao do grafico suporta Lightweight Charts v5", () => {
@@ -191,6 +204,48 @@ test("POC curto usa janela de 6h no dashboard", () => {
   const levels = supportResistance(rows);
   assert.ok(levels.poc < 150);
   assert.ok(levels.pocShort > 150);
+});
+
+test("tendencia detecta queda forte por movimento maior que dois ATR", () => {
+  const rows = Array.from({ length: 8 }, (_, index) => ({
+    time: 1700000000 + index * 900,
+    open: 100 - index,
+    high: 101 - index,
+    low: 99 - index,
+    close: 100 - index,
+    volume: 1000,
+    closeTime: (1700000000 + index * 900) * 1000,
+  }));
+  assert.equal(classifyTrend(rows, { atr: 2 }), "bearish_strong");
+});
+
+test("score progressivo e alerta de aproximacao antecipam zona quente", () => {
+  const rows = [
+    {
+      time: 1700000000,
+      open: 106,
+      high: 107,
+      low: 103,
+      close: 104,
+      volume: 1500,
+      closeTime: 1700000000000,
+    },
+  ];
+  const indicators = {
+    atr: 10,
+    volumeRatio: 1.3,
+    pocBias: "altista",
+    supportZone: { lower: 90, upper: 100 },
+    resistanceZone: { lower: 130, upper: 140 },
+    candlePatterns: { patterns: [] },
+  };
+  const alert = verificarAproximacaoZona(rows, indicators);
+  const score = calculateProgressiveScore(rows, indicators);
+  assert.equal(alert.alertType, "HOT_ZONE");
+  assert.equal(alert.alertDirection, "compra");
+  assert.ok(alert.alertMessage.includes("Prepare COMPRA"));
+  assert.ok(score.score >= 60);
+  assert.equal(score.phase, "hot");
 });
 
 test("motor de sinal retorna somente decisoes permitidas", () => {

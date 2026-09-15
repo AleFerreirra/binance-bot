@@ -325,6 +325,14 @@ dt {
   color: var(--green);
 }
 
+.decision-head strong.prepare {
+  color: var(--amber);
+}
+
+.decision-head strong.hot {
+  color: #ff9f43;
+}
+
 .decision-head strong.short,
 .decision-head strong.invalid {
   color: var(--red);

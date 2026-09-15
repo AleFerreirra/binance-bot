@@ -260,7 +260,7 @@ class TechnicalIndicators:
                 "center": center,
                 "lower": lower,
                 "upper": upper,
-                "break_price": upper + atr if kind == "high" else lower - atr,
+                "break_price": upper + atr * 0.5 if kind == "high" else lower - atr * 0.5,
                 "volume_ratio": pivot["volume_ratio"],
                 "valid_by_poc": valid_by_poc,
                 "time": pivot["time"],

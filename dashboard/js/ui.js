@@ -41,6 +41,7 @@ const els = {
   targetsLabel: document.querySelector("#targetsLabel"),
   rrLabel: document.querySelector("#rrLabel"),
   reasonsList: document.querySelector("#reasonsList"),
+  fibonacciList: document.querySelector("#fibonacciList"),
   prereqList: document.querySelector("#prereqList"),
   cancelList: document.querySelector("#cancelList"),
   trendCard: document.querySelector("#trendCard"),
@@ -381,11 +382,11 @@ function updateForexOverview(signal, session) {
 function updateDecision(signal) {
   const passesType = els.signalFilter.value === "ALL" || els.signalFilter.value === signal.decision;
   const passesScore = signal.score >= Number(els.scoreFilter.value);
-  els.decisionLabel.textContent = passesType && passesScore ? signalLabel(signal.decision) : signalLabel("WAIT");
-  els.decisionLabel.className = signal.decision === "LONG_SETUP" ? "long" : signal.decision === "SHORT_SETUP" ? "short" : signal.decision === "INVALIDATED" ? "invalid" : "";
+  els.decisionLabel.textContent = passesType && passesScore ? signalLabel(signal.decision, signal) : signalLabel("WAIT");
+  els.decisionLabel.className = decisionClassName(signal);
   els.scoreRing.style.setProperty("--score", signal.score);
   els.scoreLabel.textContent = String(signal.score);
-  els.waitMessage.hidden = signal.decision !== "WAIT";
+  els.waitMessage.hidden = signal.decision !== "WAIT" || signal.score >= 30;
   els.trend4h.textContent = trendLabel(signal.trends["4h"]);
   els.trend1h.textContent = trendLabel(signal.trends["1h"]);
   els.trend15m.textContent = trendLabel(signal.trends["15m"]);
@@ -398,6 +399,7 @@ function updateDecision(signal) {
   els.targetsLabel.textContent = signal.targets.length ? signal.targets.map(formatPrice).join(" | ") : "--";
   els.rrLabel.textContent = signal.riskReward ? `1:${signal.riskReward}` : "--";
   fillList(els.reasonsList, signal.reasons.map(translateMessage));
+  fillList(els.fibonacciList, fibonacciItems(signal));
   fillList(els.prereqList, signal.prerequisites.map(translateMessage));
   fillList(els.cancelList, signal.cancelConditions.map(translateMessage));
 }
@@ -483,7 +485,8 @@ function setState(state, label) {
   els.uiState.dataset.state = state;
 }
 
-function signalLabel(decision) {
+function signalLabel(decision, signal = {}) {
+  if (decision === "WAIT" && signal.phaseLabel) return signal.phaseLabel;
   const labels = {
     LONG_SETUP: "COMPRA",
     SHORT_SETUP: "VENDA",
@@ -493,10 +496,21 @@ function signalLabel(decision) {
   return labels[decision] ?? decision;
 }
 
+function decisionClassName(signal) {
+  if (signal.decision === "LONG_SETUP") return "long";
+  if (signal.decision === "SHORT_SETUP" || signal.decision === "INVALIDATED") return "short";
+  if (signal.score >= 85) return "long";
+  if (signal.score >= 60) return "hot";
+  if (signal.score >= 30) return "prepare";
+  return "";
+}
+
 function trendLabel(trend) {
   const labels = {
     bullish: "Alta",
     bearish: "Baixa",
+    bullish_strong: "Alta Forte",
+    bearish_strong: "Baixa Forte",
     sideways: "Lateral",
     neutral: "Neutro",
     alta: "Alta",
@@ -517,6 +531,12 @@ function statusLabel(status) {
     error: "Erro",
   };
   return labels[status] ?? labels[String(status).toLowerCase()] ?? translateMessage(status ?? "--");
+}
+
+function fibonacciItems(signal) {
+  const zones = signal.fibonacci?.zones ?? [];
+  if (!zones.length) return ["Sem zonas Fibonacci relevantes no momento."];
+  return zones.map((zone) => `${zone.label}: ${formatPrice(zone.lower)} - ${formatPrice(zone.upper)}`);
 }
 
 function translateMessage(message) {
