@@ -1,10 +1,10 @@
-import { createAlertManager } from "./alerts.js";
-import { createMarketChart } from "./chart.js";
-import { calculateIndicators, last } from "./indicators.js";
-import { getMarketClock } from "./marketClock.js";
-import { closedCandles, createKlineSocket, demoCandles, demoForexQuotes, fetchBackendSignal, fetchForexQuotes, fetchInitialCandles, fetchLocalCandles, makeDemoFeed, mergeCandle } from "./marketData.js";
-import { buildAnalysis } from "./signalEngine.js";
-import { clearHistory, loadHistory, loadPrefs, savePrefs, saveSignal } from "./storage.js";
+import { createAlertManager } from "./alerts.js?v=20260915-entry-guard";
+import { createMarketChart } from "./chart.js?v=20260915-entry-guard";
+import { calculateIndicators, last } from "./indicators.js?v=20260915-entry-guard";
+import { getMarketClock } from "./marketClock.js?v=20260915-entry-guard";
+import { closedCandles, createKlineSocket, demoCandles, demoForexQuotes, fetchBackendSignal, fetchForexQuotes, fetchInitialCandles, fetchLocalCandles, makeDemoFeed, mergeCandle } from "./marketData.js?v=20260915-entry-guard";
+import { buildAnalysis } from "./signalEngine.js?v=20260915-entry-guard";
+import { clearHistory, loadHistory, loadPrefs, savePrefs, saveSignal } from "./storage.js?v=20260915-entry-guard";
 
 const FOREX_PAIRS = Object.freeze(["EUR/USD", "USD/JPY", "GBP/USD"]);
 

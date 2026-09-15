@@ -189,7 +189,7 @@ function drawFallback(context, canvas, candles, signal, viewport = { zoom: 1, of
     signal.resistanceZone?.lower,
     signal.resistanceZone?.upper,
   ];
-  const values = data.flatMap((item) => [item.high, item.low, signal.stop, ...(signal.targets ?? []), ...zoneValues]).filter(Number.isFinite);
+  const values = data.flatMap((item) => [item.high, item.low, ...zoneValues]).filter(Number.isFinite);
   const max = Math.max(...values);
   const min = Math.min(...values);
   const range = max - min || 1;
@@ -224,10 +224,6 @@ function drawFallback(context, canvas, candles, signal, viewport = { zoom: 1, of
 
   drawZone(context, width, y, signal.supportZone, COLORS.support, "Zona demanda");
   drawZone(context, width, y, signal.resistanceZone, COLORS.resistance, "Zona supply");
-  drawLevel(context, width, y, signal.stop, COLORS.stop, "Stop");
-  for (const [index, target] of (signal.targets ?? []).entries()) {
-    drawLevel(context, width, y, target, COLORS.target, `Alvo ${index + 1}`);
-  }
 }
 
 function visibleCandleCount(candles, viewport) {
@@ -267,18 +263,6 @@ export function buildPriceLines(series, signal) {
   if (signal.resistanceZone) {
     lines.push(series.createPriceLine({ price: signal.resistanceZone.lower, color: COLORS.resistance, lineWidth: 1, title: "Supply min" }));
     lines.push(series.createPriceLine({ price: signal.resistanceZone.upper, color: COLORS.resistance, lineWidth: 1, title: "Supply max" }));
-  }
-  if (signal.entry) {
-    lines.push(series.createPriceLine({ price: signal.entry[0], color: COLORS.entry, lineWidth: 1, title: "Entrada min" }));
-    lines.push(series.createPriceLine({ price: signal.entry[1], color: COLORS.entry, lineWidth: 1, title: "Entrada max" }));
-  }
-  if (Number.isFinite(signal.stop)) {
-    lines.push(series.createPriceLine({ price: signal.stop, color: COLORS.stop, lineWidth: 2, title: "Stop" }));
-  }
-  for (const [index, target] of signal.targets.entries()) {
-    if (Number.isFinite(target)) {
-      lines.push(series.createPriceLine({ price: target, color: COLORS.target, lineWidth: 1, title: `Alvo ${index + 1}` }));
-    }
   }
   return lines;
 }

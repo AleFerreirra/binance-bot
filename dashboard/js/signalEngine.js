@@ -64,6 +64,7 @@ export function buildAnalysis(symbol, timeframe, candlesByTimeframe, options = {
   if (signal.riskReward < 2 && signal.decision !== "WAIT") {
     signal = waitSignal(symbol, timeframe, setupCandles, "relação risco/retorno inferior a 1:2", trends, ind, zoneAlert, progressive);
   }
+  signal = enforceExecutableEntry(signal, setupCandles, ind, zoneAlert, options);
   if (zoneAlert) signal = { ...signal, ...zoneAlert };
   return signal;
 }
@@ -358,7 +359,8 @@ function reversalZoneSignal(symbol, timeframe, candles, trends, setup, indicator
   if (signal.riskReward < (options.minRiskReward ?? 2)) {
     return waitSignal(symbol, timeframe, candles, "reversão em demanda sem relação risco/retorno mínima", trends, indicators, zoneAlert);
   }
-  return zoneAlert ? { ...signal, ...zoneAlert } : signal;
+  const executable = enforceExecutableEntry(signal, candles, indicators, zoneAlert, options);
+  return zoneAlert ? { ...executable, ...zoneAlert } : executable;
 }
 
 function breakdownContinuationSignal(symbol, timeframe, candles, trends, setup, indicators, options, zoneAlert) {
@@ -391,7 +393,48 @@ function breakdownContinuationSignal(symbol, timeframe, candles, trends, setup, 
   if (signal.riskReward < (options.minRiskReward ?? 2)) {
     return waitSignal(symbol, timeframe, candles, "rompimento sem relação risco/retorno mínima", trends, indicators, zoneAlert);
   }
-  return zoneAlert ? { ...signal, ...zoneAlert } : signal;
+  const executable = enforceExecutableEntry(signal, candles, indicators, zoneAlert, options);
+  return zoneAlert ? { ...executable, ...zoneAlert } : executable;
+}
+
+export function enforceExecutableEntry(signal, candles, indicators = {}, zoneAlert = null, options = {}) {
+  if (!signal || signal.decision === "WAIT" || !signal.entry) return signal;
+  const candle = last(candles);
+  if (!candle) return signal;
+  const atrVal = indicators.atr || candle.close * 0.01;
+  const tolerance = atrVal * (options.entryToleranceAtr ?? 0.05);
+  const [entryLow, entryHigh] = signal.entry;
+  const belowEntry = candle.close < entryLow - tolerance;
+  const aboveEntry = candle.close > entryHigh + tolerance;
+  if (!belowEntry && !aboveEntry) return signal;
+
+  const long = signal.decision === "LONG_SETUP";
+  const movedInFavor = long ? aboveEntry : belowEntry;
+  const reason = movedInFavor
+    ? "preço já se afastou da zona ideal; evitar perseguir movimento"
+    : "preço fora da zona executável e contra o setup; aguardar novo reteste com confirmação";
+  const directionLabel = long ? "compra" : "venda";
+  const edge = long
+    ? (aboveEntry ? entryHigh : entryLow)
+    : (aboveEntry ? entryHigh : entryLow);
+  return {
+    ...signal,
+    id: `${signal.symbol}:${signal.timeframe}:WAIT_RETEST:${Math.round(candle.close)}:${Math.round(edge)}`,
+    decision: "WAIT",
+    score: Math.min(signal.score, 59),
+    phase: "prepare",
+    phaseLabel: "AGUARDAR RETESTE",
+    reasons: [reason, ...signal.reasons],
+    prerequisites: [
+      `aguardar preço retornar à zona de ${directionLabel}: ${entryLow.toFixed(2)} - ${entryHigh.toFixed(2)}`,
+      "exigir fechamento confirmado dentro da zona antes de validar entrada",
+      ...signal.prerequisites,
+    ],
+    status: "Aguardando reteste",
+    alertType: zoneAlert?.alertType ?? "ENTRY_OUT_OF_ZONE",
+    alertMessage: zoneAlert?.alertMessage ?? `AGUARDAR RETESTE - preço fora da zona executável de ${directionLabel}`,
+    alertDirection: zoneAlert?.alertDirection ?? directionLabel,
+  };
 }
 
 function isContinuationContext(trends, setupTrend, wanted) {
