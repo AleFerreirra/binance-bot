@@ -146,6 +146,10 @@ class MarketAnalyzer:
         if bool(ind.get("false_breakout_up")):
             return self._invalidated(price, timestamp, trends, dominant, ["falso rompimento no periodo de setup"])
 
+        trigger_signal = self._entry_trigger_signal(price, timestamp, trends, zone_alert)
+        if trigger_signal:
+            return trigger_signal
+
         reversal_signal = self._reversal_zone_signal(price, timestamp, trends, zone_alert)
         if reversal_signal:
             return reversal_signal
@@ -287,20 +291,14 @@ class MarketAnalyzer:
 
         poc_bias = str(ind.get("poc_bias", "neutro"))
         poc_short_bias = str(ind.get("poc_short_bias", "neutro"))
-        if (direction == Trend.BULLISH and poc_bias == "altista") or (direction == Trend.BEARISH and poc_bias == "baixista"):
-            score += 8
-            reasons.append(f"POC 24h confirma vies {poc_bias}")
-        elif (direction == Trend.BULLISH and poc_bias == "baixista") or (direction == Trend.BEARISH and poc_bias == "altista"):
-            score -= 8
-            reasons.append("POC 24h contra a direcao")
-
-        # POC 6h (short-term flow) as secondary bias confirmation
         if (direction == Trend.BULLISH and poc_short_bias == "altista") or (direction == Trend.BEARISH and poc_short_bias == "baixista"):
-            score += 5
+            score += 8
             reasons.append(f"POC 6h confirma vies {poc_short_bias}")
         elif (direction == Trend.BULLISH and poc_short_bias == "baixista") or (direction == Trend.BEARISH and poc_short_bias == "altista"):
-            score -= 5
+            score -= 8
             reasons.append("POC 6h contra a direcao")
+        if poc_bias != poc_short_bias:
+            reasons.append(f"POC 24h apenas como contexto macro: {poc_bias}")
 
         # Confluence bonus: when 3+ timeframes agree, double the base weight
         if aligned_count >= 3:
@@ -401,6 +399,87 @@ class MarketAnalyzer:
             reasons.append(f"RSI sobrevendido ({rsi:.0f}): risco de reversao")
 
         return min(max(score, 0), 100), reasons
+
+    def _entry_trigger_signal(
+        self,
+        price: Decimal,
+        timestamp: str,
+        trends: Dict[str, str],
+        zone_alert: Dict | None,
+    ) -> MarketSignal | None:
+        setup_ind = self.analyses[self.timeframes["setup"]].indicators
+        setup_df = self.candles_by_timeframe[self.timeframes["setup"]]
+        refinement_tf = self.timeframes["refinement"]
+        if refinement_tf not in self.candles_by_timeframe:
+            return None
+        trigger_df = self.candles_by_timeframe[refinement_tf]
+        trigger_ind = self.analyses.get(refinement_tf)
+        if trigger_ind is None or trigger_df.empty:
+            return None
+        confirmation = self._confirmar_entrada(setup_df.iloc[-1], trigger_df.iloc[-1], setup_ind, trigger_ind.indicators)
+        if not confirmation["valid"]:
+            return None
+
+        direction = Trend.BULLISH if confirmation["direction"] == "compra" else Trend.BEARISH
+        decision = AnalysisDecision.LONG_SETUP if direction == Trend.BULLISH else AnalysisDecision.SHORT_SETUP
+        trigger_price = Decimal(str(trigger_df["close"].iloc[-1]))
+        trigger_timestamp = trigger_df["close_time"].iloc[-1].isoformat()
+        score_base, reasons = self._direction_score(direction)
+        signal = self._build_directional_signal(
+            decision,
+            trigger_price,
+            trigger_timestamp,
+            trends,
+            max(85, min(100, score_base + 18)),
+            [*reasons, *confirmation["reasons"]],
+        )
+        if zone_alert:
+            signal = replace(
+                signal,
+                alert_type=zone_alert["type"],
+                alert_message=zone_alert["message"],
+                alert_direction=zone_alert["direction"],
+            )
+        return signal
+
+    def _confirmar_entrada(self, setup_candle: pd.Series, trigger_candle: pd.Series, setup_ind: Dict, trigger_ind: Dict) -> Dict:
+        close_15 = Decimal(str(setup_candle["close"]))
+        atr = Decimal(str(setup_ind.get("atr", 0))) or close_15 * Decimal("0.01")
+        demand = setup_ind.get("nearest_demand_zone")
+        supply = setup_ind.get("nearest_supply_zone")
+        open_5 = Decimal(str(trigger_candle["open"]))
+        close_5 = Decimal(str(trigger_candle["close"]))
+        high_5 = Decimal(str(trigger_candle["high"]))
+        low_5 = Decimal(str(trigger_candle["low"]))
+        body = max(abs(close_5 - open_5), Decimal("0.00000001"))
+        lower_wick = min(close_5, open_5) - low_5
+        upper_wick = high_5 - max(close_5, open_5)
+        patterns = set(trigger_ind.get("candle_patterns", []))
+        volume_ok = Decimal(str(trigger_ind.get("volume_ratio", 0))) >= Decimal("1")
+        bullish_pattern = lower_wick > body * Decimal("0.5") or {"pin_bar_bullish", "bullish_engulfing"} & patterns
+        bearish_pattern = upper_wick > body * Decimal("0.5") or {"pin_bar_bearish", "bearish_engulfing"} & patterns
+
+        near_demand = demand and abs(close_15 - Decimal(str(demand["upper"]))) <= atr
+        near_supply = supply and abs(close_15 - Decimal(str(supply["lower"]))) <= atr
+        if near_demand and bullish_pattern and volume_ok:
+            return {
+                "valid": True,
+                "direction": "compra",
+                "reasons": [
+                    "contexto 15m proximo da zona de demanda",
+                    "gatilho 5m confirmou padrao comprador com volume",
+                ],
+            }
+        if near_supply and bearish_pattern and volume_ok:
+            return {
+                "valid": True,
+                "direction": "venda",
+                "reasons": [
+                    "contexto 15m proximo da zona de supply",
+                    "gatilho 5m confirmou padrao vendedor com volume",
+                ],
+            }
+        return {"valid": False, "reasons": ["gatilho 5m ainda sem padrao e volume confirmados"]}
 
     def _reversal_zone_signal(
         self,
@@ -635,7 +714,6 @@ class MarketAnalyzer:
         demand_zone = self._zone_as_decimal(ind.get("nearest_demand_zone"), price - atr)
         supply_zone = self._zone_as_decimal(ind.get("nearest_supply_zone"), price + atr)
         min_stop_percent = Decimal(str(getattr(self.config, "STOP_LOSS_PERCENT", Decimal("0.02"))))
-        min_rr = Decimal(str(getattr(self.config, "MIN_RISK_REWARD", Decimal("2"))))
         if decision == AnalysisDecision.LONG_SETUP:
             entry_low = demand_zone["lower"]
             entry_high = demand_zone["upper"]
@@ -643,15 +721,15 @@ class MarketAnalyzer:
             technical_stop = demand_zone["break_price"] - atr * Decimal("0.1")
             minimum_distance_stop = entry_reference * (Decimal("1") - min_stop_percent)
             stop = min(technical_stop, minimum_distance_stop)
-            risk = max(entry_high - stop, Decimal("0.00000001"))
-            targets = (entry_high + risk * min_rr, entry_high + risk * Decimal("3"), entry_high + risk * Decimal("4"))
+            targets = self._calcular_alvos(entry_reference, stop, long=True)
             invalidation = stop
             prerequisites = [
                 "aguardar fechamento do candle dentro ou acima da zona de demanda",
                 "confirmar reteste sem fechamento abaixo da borda externa da zona + ATR",
                 "manter volume igual ou acima da media",
+                "gatilho de entrada deve fechar no 5m com padrao e volume",
             ]
-            cancel = ["fechamento abaixo do stop tecnico", "perda do contexto de 4h/1h", "spread ou liquidez fora do filtro"]
+            cancel = ["fechamento abaixo do stop tecnico", "perda do contexto de 4h/1h", "spread ou liquidez fora do filtro", "time stop: 4h sem atingir alvo 1 ou fechamento as 22h BRT"]
         else:
             entry_low = supply_zone["lower"]
             entry_high = supply_zone["upper"]
@@ -659,17 +737,17 @@ class MarketAnalyzer:
             technical_stop = supply_zone["break_price"]
             minimum_distance_stop = entry_reference * (Decimal("1") + min_stop_percent)
             stop = max(technical_stop, minimum_distance_stop)
-            risk = max(stop - entry_low, Decimal("0.00000001"))
-            targets = (entry_low - risk * min_rr, entry_low - risk * Decimal("3"), entry_low - risk * Decimal("4"))
+            targets = self._calcular_alvos(entry_reference, stop, long=False)
             invalidation = stop
             prerequisites = [
                 "aguardar fechamento do candle dentro ou abaixo da zona de supply",
                 "confirmar rejeicao sem fechamento acima da borda externa da zona + ATR",
                 "manter volume confirmando o movimento",
+                "gatilho de entrada deve fechar no 5m com padrao e volume",
             ]
-            cancel = ["fechamento acima do stop tecnico", "recuperacao do contexto de 4h/1h", "spread ou liquidez fora do filtro"]
+            cancel = ["fechamento acima do stop tecnico", "recuperacao do contexto de 4h/1h", "spread ou liquidez fora do filtro", "time stop: 4h sem atingir alvo 1 ou fechamento as 22h BRT"]
 
-        rr = abs((targets[0] - entry_high) / (entry_high - stop)) if decision == AnalysisDecision.LONG_SETUP else abs((entry_low - targets[0]) / (stop - entry_low))
+        rr = Decimal("2.00")
         dominant = "alta" if decision == AnalysisDecision.LONG_SETUP else "baixa"
 
         # Classify confidence
@@ -713,6 +791,22 @@ class MarketAnalyzer:
             },
             detailed_indicators=self._extract_detailed_indicators(ind),
         )
+
+    def _calcular_alvos(self, entry_reference: Decimal, stop: Decimal, long: bool) -> Tuple[Decimal, Decimal, Decimal]:
+        risk = max(abs(entry_reference - stop), Decimal("0.00000001"))
+        multiples = (Decimal("1.0"), Decimal("1.5"), Decimal("2.0"))
+        if long:
+            return tuple(entry_reference + risk * multiple for multiple in multiples)
+        return tuple(entry_reference - risk * multiple for multiple in multiples)
+
+    @staticmethod
+    def verificar_time_stop(opened_at, now, target_1_hit: bool, market_close_hour_brt: int = 22) -> Dict:
+        elapsed_hours = (now - opened_at).total_seconds() / 3600
+        if elapsed_hours >= 4 and not target_1_hit:
+            return {"close": True, "reason": "TIME_STOP_4H_SEM_ALVO_1"}
+        if getattr(now, "hour", None) is not None and now.hour >= market_close_hour_brt:
+            return {"close": True, "reason": "FECHAMENTO_MERCADO_22H_BRT"}
+        return {"close": False, "reason": ""}
 
     def _zone_as_decimal(self, zone: Dict | None, fallback_center: Decimal) -> Dict[str, Decimal]:
         if not zone:

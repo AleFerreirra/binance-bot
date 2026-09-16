@@ -14,6 +14,7 @@ import {
   classifyTrend,
   createDirectional,
   DECISIONS,
+  verificarTimeStop,
   verificarAproximacaoZona,
 } from "../dashboard/js/signalEngine.js";
 
@@ -266,16 +267,18 @@ test("motor de sinal sai de aguardar quando ha confluencia suficiente", () => {
   assert.ok(signal.score >= 70);
 });
 
-test("periodo selecionado guia a analise principal do sinal", () => {
+test("day trade usa 15m como contexto mesmo com filtro em 5m", () => {
   const up = candles(260, 1);
   const down = candles(260, -1);
   const signal = buildAnalysis("BTCUSDT", "5m", { "5m": down, "15m": up, "1h": up, "4h": up }, {
     minRiskReward: 2,
     minStopLossPercent: 0.02,
+    entryToleranceAtr: 999999,
   });
   assert.equal(signal.timeframe, "5m");
   assert.notEqual(signal.trends["5m"], signal.trends["15m"]);
-  assert.notEqual(signal.decision, "LONG_SETUP");
+  assert.ok(signal.reasons.some((reason) => reason.includes("contexto 15m") || reason.includes("gatilho 5m")));
+  assert.notEqual(signal.decision, "WAIT");
 });
 
 test("stop loss respeita distancia minima configurada", () => {
@@ -299,6 +302,41 @@ test("stop loss respeita distancia minima configurada", () => {
   const entryReference = (signal.entry[0] + signal.entry[1]) / 2;
   assert.ok(Math.abs((entryReference - signal.stop) / entryReference) >= 0.02);
   assert.ok(signal.stopLossPercent >= 2);
+});
+
+test("alvos de day trade usam 1R 1.5R e 2R", () => {
+  const data = candles();
+  const signal = createDirectional(
+    "SHORT_SETUP",
+    "BTCUSDT",
+    "15m",
+    data,
+    { "4h": "bearish", "1h": "bearish", "15m": "bearish" },
+    {
+      atr: 1,
+      support: 95,
+      resistance: 101,
+      resistanceZone: { lower: 100, upper: 102, breakPrice: 104 },
+      supportZone: { lower: 90, upper: 92, breakPrice: 88 },
+      volumeRatio: 1.5,
+      volatility: 0.01,
+    },
+    { score: 80, reasons: [] },
+    { minStopLossPercent: 0.02, minRiskReward: 2 },
+  );
+  const entryReference = (signal.entry[0] + signal.entry[1]) / 2;
+  const risk = signal.stop - entryReference;
+  assert.equal(Number((entryReference - signal.targets[0]).toFixed(8)), Number(risk.toFixed(8)));
+  assert.equal(Number((entryReference - signal.targets[1]).toFixed(8)), Number((risk * 1.5).toFixed(8)));
+  assert.equal(Number((entryReference - signal.targets[2]).toFixed(8)), Number((risk * 2).toFixed(8)));
+});
+
+test("time stop orienta fechamento apos 4h sem alvo 1", () => {
+  const openedAt = "2026-09-15T12:00:00.000Z";
+  const now = new Date("2026-09-15T16:01:00.000Z");
+  const result = verificarTimeStop({ openedAt, target1Hit: false }, now);
+  assert.equal(result.close, true);
+  assert.equal(result.reason, "TIME_STOP_4H_SEM_ALVO_1");
 });
 
 test("relogio de mercado mostra cripto 24h e sessoes globais", () => {

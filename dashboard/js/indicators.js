@@ -97,8 +97,8 @@ export function supportResistance(candles, period = 40) {
   const poc = pointOfControl(candles);
   const pocShort = pointOfControl(candles, 48, 24);
   const pivots = confirmedVolumePivots(candles, atrValue);
-  const supplyZones = zonesFromPivots(pivots, "high", atrValue, current, poc);
-  const demandZones = zonesFromPivots(pivots, "low", atrValue, current, poc);
+  const supplyZones = zonesFromPivots(pivots, "high", atrValue, current, pocShort);
+  const demandZones = zonesFromPivots(pivots, "low", atrValue, current, pocShort);
   const resistanceZone = nearestZone(supplyZones, current, true);
   const supportZone = nearestZone(demandZones, current, false);
   return {

@@ -187,8 +187,8 @@ class TechnicalIndicators:
         bias = "altista" if current > poc else "baixista" if current < poc else "neutro"
         short_bias = "altista" if current > poc_short else "baixista" if current < poc_short else "neutro"
         pivots = self._confirmed_volume_pivots(volume_ma, atr)
-        supply = self._zones_from_pivots(pivots, "high", atr, current, poc)
-        demand = self._zones_from_pivots(pivots, "low", atr, current, poc)
+        supply = self._zones_from_pivots(pivots, "high", atr, current, poc_short)
+        demand = self._zones_from_pivots(pivots, "low", atr, current, poc_short)
         nearest_supply = self._nearest_zone(supply, current, above=True)
         nearest_demand = self._nearest_zone(demand, current, above=False)
 

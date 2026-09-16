@@ -7,8 +7,10 @@ import { calculateIndicators, last } from "./indicators.js";
 export const DECISIONS = Object.freeze(["LONG_SETUP", "SHORT_SETUP", "WAIT", "INVALIDATED"]);
 
 export function buildAnalysis(symbol, timeframe, candlesByTimeframe, options = {}) {
-  const decisionTimeframe = timeframe;
+  const decisionTimeframe = candlesByTimeframe["15m"]?.length ? "15m" : timeframe;
+  const triggerTimeframe = candlesByTimeframe["5m"]?.length ? "5m" : decisionTimeframe;
   const setupCandles = candlesByTimeframe[decisionTimeframe] ?? candlesByTimeframe[timeframe] ?? [];
+  const triggerCandles = candlesByTimeframe[triggerTimeframe] ?? setupCandles;
   if (setupCandles.length < 220) {
     return waitSignal(symbol, timeframe, setupCandles, "dados insuficientes para EMA 200");
   }
@@ -37,6 +39,9 @@ export function buildAnalysis(symbol, timeframe, candlesByTimeframe, options = {
   const progressive = calculateProgressiveScore(setupCandles, ind, options);
   const filters = marketFilters(ind, spread, options);
   if (filters.length) return waitSignal(symbol, timeframe, setupCandles, filters.join("; "), trends, ind, zoneAlert, progressive);
+
+  const triggerSignal = triggerEntrySignal(symbol, timeframe, setupCandles, triggerCandles, trends, setup, ind, options, zoneAlert);
+  if (triggerSignal) return triggerSignal;
 
   const reversalSignal = reversalZoneSignal(symbol, timeframe, setupCandles, trends, setup, ind, options, zoneAlert);
   if (reversalSignal) return reversalSignal;
@@ -104,8 +109,8 @@ export function directionScore(direction, trends, setup, options = {}) {
   const reasons = [];
   const wanted = direction === "compra" ? "bullish" : "bearish";
   const wantedLabel = direction === "compra" ? "alta" : "baixa";
-  const pocBias = options.useShortPoc ? ind.pocShortBias : ind.pocBias;
-  const pocLabel = options.useShortPoc ? "POC 6h" : "POC 24h";
+  const pocBias = ind.pocShortBias ?? ind.pocBias;
+  const pocLabel = "POC 6h";
 
   // Multi-timeframe alignment (0-55 base)
   let alignedCount = 0;
@@ -129,6 +134,10 @@ export function directionScore(direction, trends, setup, options = {}) {
   } else if ((direction === "compra" && pocBias === "baixista") || (direction === "venda" && pocBias === "altista")) {
     score -= 8;
     reasons.push(`${pocLabel} contra a direção`);
+  }
+  const macroPocBias = ind.pocBias ?? "neutro";
+  if (macroPocBias !== pocBias) {
+    reasons.push(`POC 24h apenas como contexto macro: ${macroPocBias}`);
   }
   // Confluence bonus
   if (alignedCount >= 3) {
@@ -257,9 +266,7 @@ export function createDirectional(decision, symbol, timeframe, candles, trends, 
     ? Math.min(technicalStop, minimumDistanceStop)
     : Math.max(technicalStop, minimumDistanceStop);
   const risk = long ? entry[1] - stop : stop - entry[0];
-  const targets = long
-    ? [entry[1] + risk * minRiskReward, entry[1] + risk * 3, entry[1] + risk * 4]
-    : [entry[0] - risk * minRiskReward, entry[0] - risk * 3, entry[0] - risk * 4];
+  const targets = calcularAlvos(entryReference, stop, long);
 
   // Classify confidence
   const adxVal = indicators.adx ?? 20;
@@ -297,7 +304,7 @@ export function createDirectional(decision, symbol, timeframe, candles, trends, 
     entry,
     stop,
     targets,
-    riskReward: Number(minRiskReward.toFixed ? minRiskReward.toFixed(2) : minRiskReward),
+    riskReward: 2,
     stopLossPercent: Math.abs((entryReference - stop) / entryReference) * 100,
     gainPercent: Math.abs((targets[0] - entryReference) / entryReference) * 100,
     support: indicators.support,
@@ -332,6 +339,98 @@ export function createDirectional(decision, symbol, timeframe, candles, trends, 
     alertMessage: "",
     alertDirection: "",
   };
+}
+
+export function calcularAlvos(entryReference, stop, long) {
+  const risk = Math.max(Math.abs(entryReference - stop), 1e-9);
+  const multipliers = [1, 1.5, 2];
+  return multipliers.map((multiple) => long ? entryReference + risk * multiple : entryReference - risk * multiple);
+}
+
+function triggerEntrySignal(symbol, timeframe, setupCandles, triggerCandles, trends, setup, indicators, options, zoneAlert) {
+  if (!triggerCandles?.length || triggerCandles === setupCandles) return null;
+  const triggerIndicators = calculateIndicators(triggerCandles);
+  const trigger = confirmarEntrada(setupCandles, triggerCandles, indicators, triggerIndicators);
+  if (!trigger.valid) return null;
+  const direction = trigger.direction === "compra" ? "LONG_SETUP" : "SHORT_SETUP";
+  const scored = directionScore(trigger.direction, trends, setup, options);
+  const signal = createDirectional(
+    direction,
+    symbol,
+    timeframe,
+    triggerCandles,
+    trends,
+    indicators,
+    {
+      score: Math.max(85, Math.min(100, scored.score + 18)),
+      reasons: [...scored.reasons, ...trigger.reasons],
+    },
+    options,
+  );
+  return zoneAlert ? { ...signal, ...zoneAlert } : signal;
+}
+
+export function confirmarEntrada(contextCandles, triggerCandles, contextIndicators, triggerIndicators = calculateIndicators(triggerCandles)) {
+  const contextCandle = last(contextCandles);
+  const triggerCandle = last(triggerCandles);
+  if (!contextCandle || !triggerCandle) return { valid: false, reasons: ["sem candles suficientes para gatilho"] };
+  const atrVal = contextIndicators.atr || contextCandle.close * 0.01;
+  const demand = contextIndicators.supportZone;
+  const supply = contextIndicators.resistanceZone;
+  const volumeOk = (triggerIndicators.volumeRatio ?? 0) >= 1;
+  const body = Math.max(Math.abs(triggerCandle.close - triggerCandle.open), 1e-9);
+  const lowerWick = Math.min(triggerCandle.close, triggerCandle.open) - triggerCandle.low;
+  const upperWick = triggerCandle.high - Math.max(triggerCandle.close, triggerCandle.open);
+  const patterns = triggerIndicators.candlePatterns?.patterns ?? [];
+  const bullishPattern = lowerWick > body * 0.5
+    || patterns.includes("pin_bar_bullish")
+    || patterns.includes("bullish_engulfing");
+  const bearishPattern = upperWick > body * 0.5
+    || patterns.includes("pin_bar_bearish")
+    || patterns.includes("bearish_engulfing");
+  const nearDemand = demand && Math.abs(contextCandle.close - demand.upper) <= atrVal;
+  const nearSupply = supply && Math.abs(contextCandle.close - supply.lower) <= atrVal;
+
+  if (nearDemand && bullishPattern && volumeOk) {
+    return {
+      valid: true,
+      direction: "compra",
+      reasons: [
+        "contexto 15m próximo da zona de demanda",
+        "gatilho 5m confirmou padrão comprador com volume",
+      ],
+    };
+  }
+  if (nearSupply && bearishPattern && volumeOk) {
+    return {
+      valid: true,
+      direction: "venda",
+      reasons: [
+        "contexto 15m próximo da zona de supply",
+        "gatilho 5m confirmou padrão vendedor com volume",
+      ],
+    };
+  }
+  return { valid: false, reasons: ["gatilho 5m ainda sem padrão e volume confirmados"] };
+}
+
+export function verificarTimeStop(position, now = new Date()) {
+  if (!position?.openedAt) return { close: false, reason: "" };
+  const openedAt = new Date(position.openedAt);
+  const elapsedMs = now.getTime() - openedAt.getTime();
+  const target1Hit = Boolean(position.target1Hit);
+  if (elapsedMs >= 4 * 60 * 60 * 1000 && !target1Hit) {
+    return { close: true, reason: "TIME_STOP_4H_SEM_ALVO_1" };
+  }
+  const brtHour = Number(new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    hour: "2-digit",
+    hour12: false,
+  }).format(now));
+  if (brtHour >= 22) {
+    return { close: true, reason: "FECHAMENTO_MERCADO_22H_BRT" };
+  }
+  return { close: false, reason: "" };
 }
 
 function reversalZoneSignal(symbol, timeframe, candles, trends, setup, indicators, options, zoneAlert) {

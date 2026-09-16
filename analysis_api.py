@@ -32,10 +32,11 @@ def runtime_port(config: Config) -> int:
 
 
 def selected_config(config: Config, timeframe: str) -> Config:
-    """Return runtime config using the dashboard-selected setup timeframe."""
+    """Validate chart timeframe while keeping day-trade setup on 15m and trigger on 5m."""
     if timeframe not in ALLOWED_TIMEFRAMES:
         raise ValueError(f"timeframe invalido: {timeframe}")
-    config.SETUP_TIMEFRAME = timeframe
+    config.SETUP_TIMEFRAME = "15m"
+    config.REFINEMENT_TIMEFRAME = "5m"
     return config
 
 

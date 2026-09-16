@@ -1,4 +1,5 @@
 from decimal import Decimal
+from datetime import datetime, timezone, timedelta
 
 import pandas as pd
 import pytest
@@ -150,3 +151,33 @@ def test_signal_serializes_operational_alert_fields():
     assert "tipo_alerta" in payload
     assert "mensagem_alerta" in payload
     assert "direcao_alerta" in payload
+
+
+def test_directional_targets_are_daytrade_r_multiples():
+    analyzer = MarketAnalyzer(
+        "BNBUSDT",
+        {"4h": candles(), "1h": candles(), "15m": candles(), "5m": candles()},
+        DummyConfig,
+        spread_percent=Decimal("0.001"),
+    )
+    signal = analyzer._build_directional_signal(
+        AnalysisDecision.SHORT_SETUP,
+        Decimal("350"),
+        "2026-01-01T00:00:00+00:00",
+        {"4h": "bearish", "1h": "bearish", "15m": "bearish", "5m": "bearish"},
+        85,
+        ["teste"],
+    )
+    entry = sum(signal.ideal_entry_region) / Decimal("2")
+    risk = signal.stop_loss - entry
+    assert (entry - signal.target_1).quantize(Decimal("0.0001")) == risk.quantize(Decimal("0.0001"))
+    assert (entry - signal.target_2).quantize(Decimal("0.0001")) == (risk * Decimal("1.5")).quantize(Decimal("0.0001"))
+    assert (entry - signal.target_3).quantize(Decimal("0.0001")) == (risk * Decimal("2")).quantize(Decimal("0.0001"))
+
+
+def test_time_stop_flags_position_after_four_hours_without_target():
+    opened = datetime(2026, 1, 1, 12, tzinfo=timezone.utc)
+    now = opened + timedelta(hours=4, minutes=1)
+    result = MarketAnalyzer.verificar_time_stop(opened, now, target_1_hit=False)
+    assert result["close"]
+    assert result["reason"] == "TIME_STOP_4H_SEM_ALVO_1"
