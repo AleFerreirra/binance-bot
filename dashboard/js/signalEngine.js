@@ -7,7 +7,7 @@ import { calculateIndicators, last } from "./indicators.js";
 export const DECISIONS = Object.freeze(["LONG_SETUP", "SHORT_SETUP", "WAIT", "INVALIDATED"]);
 
 export function buildAnalysis(symbol, timeframe, candlesByTimeframe, options = {}) {
-  const decisionTimeframe = candlesByTimeframe["15m"]?.length ? "15m" : timeframe;
+  const decisionTimeframe = timeframe;
   const setupCandles = candlesByTimeframe[decisionTimeframe] ?? candlesByTimeframe[timeframe] ?? [];
   if (setupCandles.length < 220) {
     return waitSignal(symbol, timeframe, setupCandles, "dados insuficientes para EMA 200");

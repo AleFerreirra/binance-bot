@@ -260,19 +260,22 @@ test("motor de sinal sai de aguardar quando ha confluencia suficiente", () => {
   const signal = buildAnalysis("BTCUSDT", "15m", { "5m": up, "15m": up, "1h": up, "4h": up }, {
     minRiskReward: 2,
     minStopLossPercent: 0.02,
+    entryToleranceAtr: 999999,
   });
   assert.equal(signal.decision, "LONG_SETUP");
   assert.ok(signal.score >= 70);
 });
 
-test("periodo 5m contrario nao bloqueia configuracao alinhada de 15m", () => {
+test("periodo selecionado guia a analise principal do sinal", () => {
   const up = candles(260, 1);
   const down = candles(260, -1);
   const signal = buildAnalysis("BTCUSDT", "5m", { "5m": down, "15m": up, "1h": up, "4h": up }, {
     minRiskReward: 2,
     minStopLossPercent: 0.02,
   });
-  assert.equal(signal.decision, "LONG_SETUP");
+  assert.equal(signal.timeframe, "5m");
+  assert.notEqual(signal.trends["5m"], signal.trends["15m"]);
+  assert.notEqual(signal.decision, "LONG_SETUP");
 });
 
 test("stop loss respeita distancia minima configurada", () => {

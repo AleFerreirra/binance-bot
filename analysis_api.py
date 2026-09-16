@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parent
 DASHBOARD_DIR = ROOT / "dashboard"
 LOCAL_HOST = "127.0.0.1"
 PRODUCTION_HOST = "0.0.0.0"
+ALLOWED_TIMEFRAMES = {"5m", "15m", "1h", "4h"}
 
 
 def is_production() -> bool:
@@ -28,6 +29,14 @@ def runtime_host() -> str:
 
 def runtime_port(config: Config) -> int:
     return int(os.getenv("PORT", str(config.DASHBOARD_PORT)))
+
+
+def selected_config(config: Config, timeframe: str) -> Config:
+    """Return runtime config using the dashboard-selected setup timeframe."""
+    if timeframe not in ALLOWED_TIMEFRAMES:
+        raise ValueError(f"timeframe invalido: {timeframe}")
+    config.SETUP_TIMEFRAME = timeframe
+    return config
 
 
 class AnalysisHandler(SimpleHTTPRequestHandler):
@@ -87,6 +96,7 @@ class AnalysisHandler(SimpleHTTPRequestHandler):
             params = parse_qs(query)
             symbol = params.get("symbol", [config.SYMBOLS[0]])[0].upper()
             chart_timeframe = params.get("timeframe", [config.SETUP_TIMEFRAME])[0]
+            config = selected_config(config, chart_timeframe)
             setup_timeframe = config.SETUP_TIMEFRAME
             timeframes = {
                 config.CONTEXT_TIMEFRAME,
@@ -140,6 +150,7 @@ class AnalysisHandler(SimpleHTTPRequestHandler):
             params = parse_qs(query)
             symbol = params.get("symbol", [config.SYMBOLS[0]])[0].upper()
             chart_timeframe = params.get("timeframe", [config.SETUP_TIMEFRAME])[0]
+            config = selected_config(config, chart_timeframe)
             setup_timeframe = config.SETUP_TIMEFRAME
             timeframes = {
                 config.CONTEXT_TIMEFRAME,
@@ -188,6 +199,7 @@ class AnalysisHandler(SimpleHTTPRequestHandler):
             raw_symbols = params.get("symbols", [",".join(config.WATCHLIST_SYMBOLS)])[0]
             symbols = [s.strip().upper() for s in raw_symbols.split(",") if s.strip()]
             chart_timeframe = params.get("timeframe", [config.SETUP_TIMEFRAME])[0]
+            config = selected_config(config, chart_timeframe)
             setup_timeframe = config.SETUP_TIMEFRAME
             timeframes = {
                 config.CONTEXT_TIMEFRAME,
