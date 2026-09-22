@@ -173,6 +173,33 @@ def test_directional_targets_are_daytrade_r_multiples():
     assert (entry - signal.target_1).quantize(Decimal("0.0001")) == risk.quantize(Decimal("0.0001"))
     assert (entry - signal.target_2).quantize(Decimal("0.0001")) == (risk * Decimal("1.5")).quantize(Decimal("0.0001"))
     assert (entry - signal.target_3).quantize(Decimal("0.0001")) == (risk * Decimal("2")).quantize(Decimal("0.0001"))
+    assert signal.risk_reward == Decimal("2.00")
+
+
+def test_backend_blocks_signal_outside_executable_entry_zone():
+    analyzer = MarketAnalyzer(
+        "BNBUSDT",
+        {"4h": candles(), "1h": candles(), "15m": candles(), "5m": candles()},
+        DummyConfig,
+        spread_percent=Decimal("0.001"),
+    )
+    signal = analyzer._build_directional_signal(
+        AnalysisDecision.LONG_SETUP,
+        Decimal("350"),
+        "2026-01-01T00:00:00+00:00",
+        {"4h": "bullish", "1h": "bullish", "15m": "bullish", "5m": "bullish"},
+        95,
+        ["teste"],
+    )
+    blocked = analyzer._enforce_executable_entry(
+        signal,
+        Decimal("1"),
+        {"atr": Decimal("1")},
+        None,
+    )
+    assert blocked.decision == AnalysisDecision.WAIT
+    assert blocked.score <= 59
+    assert "fora da zona executavel" in blocked.reasons[0]
 
 
 def test_time_stop_flags_position_after_four_hours_without_target():

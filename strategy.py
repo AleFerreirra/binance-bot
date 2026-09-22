@@ -190,6 +190,7 @@ class MarketAnalyzer:
                 signal.reasons + ["relacao risco/retorno inferior a 1:2"],
                 zone_alert,
             )
+        signal = self._enforce_executable_entry(signal, price, ind, zone_alert)
         if zone_alert:
             signal = replace(
                 signal,
@@ -451,6 +452,7 @@ class MarketAnalyzer:
             max(85, min(100, score_base + 18)),
             [*reasons, *confirmation["reasons"]],
         )
+        signal = self._enforce_executable_entry(signal, trigger_price, setup_ind, zone_alert)
         if zone_alert:
             signal = replace(
                 signal,
@@ -767,7 +769,7 @@ class MarketAnalyzer:
 
         entry_mid = (entry_low + entry_high) / Decimal("2")
         risk = max(abs(entry_mid - stop), Decimal("0.00000001"))
-        reward = abs(targets[0] - entry_mid)
+        reward = abs(targets[2] - entry_mid)
         rr = (reward / risk).quantize(Decimal("0.01"))
         dominant = "alta" if decision == AnalysisDecision.LONG_SETUP else "baixa"
 
@@ -819,6 +821,50 @@ class MarketAnalyzer:
         if long:
             return tuple(entry_reference + risk * multiple for multiple in multiples)
         return tuple(entry_reference - risk * multiple for multiple in multiples)
+
+    def _enforce_executable_entry(
+        self,
+        signal: MarketSignal,
+        price: Decimal,
+        indicators: Dict,
+        zone_alert: Dict | None,
+    ) -> MarketSignal:
+        if signal.decision not in {AnalysisDecision.LONG_SETUP, AnalysisDecision.SHORT_SETUP}:
+            return signal
+        if not signal.ideal_entry_region:
+            return signal
+
+        entry_low, entry_high = signal.ideal_entry_region
+        atr = Decimal(str(indicators.get("atr", 0))) or price * Decimal("0.01")
+        tolerance = atr * Decimal(str(getattr(self.config, "ENTRY_TOLERANCE_ATR", Decimal("0.05"))))
+        below_entry = price < entry_low - tolerance
+        above_entry = price > entry_high + tolerance
+        if not below_entry and not above_entry:
+            return signal
+
+        long = signal.decision == AnalysisDecision.LONG_SETUP
+        moved_in_favor = above_entry if long else below_entry
+        reason = (
+            "preco ja se afastou da zona ideal; evitar perseguir movimento"
+            if moved_in_favor
+            else "preco fora da zona executavel e contra o setup; aguardar novo reteste com confirmacao"
+        )
+        direction_label = "compra" if long else "venda"
+        return replace(
+            signal,
+            decision=AnalysisDecision.WAIT,
+            score=min(signal.score, 59),
+            reasons=[reason, *signal.reasons],
+            prerequisites=[
+                f"aguardar preco retornar a zona de {direction_label}: {entry_low} - {entry_high}",
+                "exigir fechamento confirmado dentro da zona antes de validar entrada",
+                *signal.prerequisites,
+            ],
+            confidence_level="baixa",
+            alert_type=zone_alert["type"] if zone_alert else "ENTRY_OUT_OF_ZONE",
+            alert_message=zone_alert["message"] if zone_alert else f"AGUARDAR RETESTE - preco fora da zona executavel de {direction_label}",
+            alert_direction=zone_alert["direction"] if zone_alert else direction_label,
+        )
 
     @staticmethod
     def verificar_time_stop(opened_at, now, target_1_hit: bool, market_close_hour_brt: int = 22) -> Dict:
