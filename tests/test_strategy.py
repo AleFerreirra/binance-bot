@@ -27,9 +27,9 @@ class DummyConfig:
     KLINE_LIMIT = 250
     SYMBOL = "BNBUSDT"
     CONTEXT_TIMEFRAME = "4h"
-    CONFIRMATION_TIMEFRAME = "1h"
-    SETUP_TIMEFRAME = "15m"
-    REFINEMENT_TIMEFRAME = "5m"
+    CONFIRMATION_TIMEFRAME = "15m"
+    SETUP_TIMEFRAME = "5m"
+    REFINEMENT_TIMEFRAME = "1m"
     STOP_LOSS_PERCENT = Decimal("0.02")
     TAKE_PROFIT_PERCENT = Decimal("0.04")
     RISK_PER_TRADE = Decimal("0.005")
@@ -57,6 +57,10 @@ def candles(rows=260):
     })
 
 
+def market_frames(rows=260):
+    return {"4h": candles(rows), "15m": candles(rows), "5m": candles(rows), "1m": candles(rows)}
+
+
 def price_action_dataframe():
     data = candles()
     high_idx = data.index[-30]
@@ -70,13 +74,13 @@ def price_action_dataframe():
 
 def test_rejects_insufficient_closed_candles():
     with pytest.raises(ValueError):
-        MarketAnalyzer("BNBUSDT", {"4h": candles(50), "1h": candles(50), "15m": candles(50), "5m": candles(50)}, DummyConfig)
+        MarketAnalyzer("BNBUSDT", market_frames(50), DummyConfig)
 
 
 def test_spread_filter_blocks_signal():
     analyzer = MarketAnalyzer(
         "BNBUSDT",
-        {"4h": candles(), "1h": candles(), "15m": candles(), "5m": candles()},
+        market_frames(),
         DummyConfig,
         spread_percent=Decimal("0.01"),
     )
@@ -88,7 +92,7 @@ def test_spread_filter_blocks_signal():
 def test_signal_uses_allowed_decisions_only():
     analyzer = MarketAnalyzer(
         "BNBUSDT",
-        {"4h": candles(), "1h": candles(), "15m": candles(), "5m": candles()},
+        market_frames(),
         DummyConfig,
         spread_percent=Decimal("0.001"),
     )
@@ -130,7 +134,7 @@ def test_breakout_uses_zone_break_price():
 def test_demand_rejection_rule_accepts_reversal_conditions():
     analyzer = MarketAnalyzer(
         "BNBUSDT",
-        {"4h": candles(), "1h": candles(), "15m": candles(), "5m": candles()},
+        market_frames(),
         DummyConfig,
         spread_percent=Decimal("0.001"),
     )
@@ -143,7 +147,7 @@ def test_demand_rejection_rule_accepts_reversal_conditions():
 def test_signal_serializes_operational_alert_fields():
     analyzer = MarketAnalyzer(
         "BNBUSDT",
-        {"4h": candles(), "1h": candles(), "15m": candles(), "5m": candles()},
+        market_frames(),
         DummyConfig,
         spread_percent=Decimal("0.001"),
     )
@@ -156,7 +160,7 @@ def test_signal_serializes_operational_alert_fields():
 def test_directional_targets_are_daytrade_r_multiples():
     analyzer = MarketAnalyzer(
         "BNBUSDT",
-        {"4h": candles(), "1h": candles(), "15m": candles(), "5m": candles()},
+        market_frames(),
         DummyConfig,
         spread_percent=Decimal("0.001"),
     )
@@ -164,7 +168,7 @@ def test_directional_targets_are_daytrade_r_multiples():
         AnalysisDecision.SHORT_SETUP,
         Decimal("350"),
         "2026-01-01T00:00:00+00:00",
-        {"4h": "bearish", "1h": "bearish", "15m": "bearish", "5m": "bearish"},
+        {"4h": "bearish", "15m": "bearish", "5m": "bearish", "1m": "bearish"},
         85,
         ["teste"],
     )
@@ -179,7 +183,7 @@ def test_directional_targets_are_daytrade_r_multiples():
 def test_backend_blocks_signal_outside_executable_entry_zone():
     analyzer = MarketAnalyzer(
         "BNBUSDT",
-        {"4h": candles(), "1h": candles(), "15m": candles(), "5m": candles()},
+        market_frames(),
         DummyConfig,
         spread_percent=Decimal("0.001"),
     )
@@ -187,7 +191,7 @@ def test_backend_blocks_signal_outside_executable_entry_zone():
         AnalysisDecision.LONG_SETUP,
         Decimal("350"),
         "2026-01-01T00:00:00+00:00",
-        {"4h": "bullish", "1h": "bullish", "15m": "bullish", "5m": "bullish"},
+        {"4h": "bullish", "15m": "bullish", "5m": "bullish", "1m": "bullish"},
         95,
         ["teste"],
     )
@@ -205,7 +209,7 @@ def test_backend_blocks_signal_outside_executable_entry_zone():
 def test_backend_disallows_long_when_5m_trend_is_bearish():
     analyzer = MarketAnalyzer(
         "BNBUSDT",
-        {"4h": candles(), "1h": candles(), "15m": candles(), "5m": candles()},
+        market_frames(),
         DummyConfig,
         spread_percent=Decimal("0.001"),
     )

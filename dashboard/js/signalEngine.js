@@ -7,9 +7,10 @@ import { calculateIndicators, last } from "./indicators.js";
 export const DECISIONS = Object.freeze(["LONG_SETUP", "SHORT_SETUP", "WAIT", "INVALIDATED"]);
 
 export function buildAnalysis(symbol, timeframe, candlesByTimeframe, options = {}) {
-  const decisionTimeframe = candlesByTimeframe["15m"]?.length ? "15m" : timeframe;
-  const triggerTimeframe = candlesByTimeframe["5m"]?.length ? "5m" : decisionTimeframe;
-  const setupCandles = candlesByTimeframe[decisionTimeframe] ?? candlesByTimeframe[timeframe] ?? [];
+  const macroTimeframe = candlesByTimeframe["15m"]?.length ? "15m" : timeframe;
+  const mainTimeframe = candlesByTimeframe["5m"]?.length ? "5m" : timeframe;
+  const triggerTimeframe = candlesByTimeframe["1m"]?.length ? "1m" : mainTimeframe;
+  const setupCandles = candlesByTimeframe[mainTimeframe] ?? candlesByTimeframe[timeframe] ?? [];
   const triggerCandles = candlesByTimeframe[triggerTimeframe] ?? setupCandles;
   if (setupCandles.length < 220) {
     return waitSignal(symbol, timeframe, setupCandles, "dados insuficientes para EMA 200");
@@ -23,15 +24,17 @@ export function buildAnalysis(symbol, timeframe, candlesByTimeframe, options = {
     }
   }
 
-  const setup = analysis[decisionTimeframe] ?? analysis[timeframe];
+  const setup = analysis[mainTimeframe] ?? analysis[timeframe];
+  const macro = analysis[macroTimeframe] ?? setup;
   if (!setup) return waitSignal(symbol, timeframe, setupCandles, "sem dados de configuração");
   const current = last(setupCandles);
   const ind = setup.indicators;
   const trends = {
     "4h": analysis["4h"]?.trend ?? "sideways",
     "1h": analysis["1h"]?.trend ?? "sideways",
-    "15m": analysis["15m"]?.trend ?? setup?.trend ?? "sideways",
-    "5m": analysis["5m"]?.trend ?? "sideways",
+    "15m": macro?.trend ?? "sideways",
+    "5m": setup?.trend ?? "sideways",
+    "1m": analysis["1m"]?.trend ?? "sideways",
   };
   const spread = options.spread ?? 0;
   const minScore = options.minScore ?? 0;
@@ -39,6 +42,9 @@ export function buildAnalysis(symbol, timeframe, candlesByTimeframe, options = {
   const progressive = calculateProgressiveScore(setupCandles, ind, options);
   const filters = marketFilters(ind, spread, options);
   if (filters.length) return waitSignal(symbol, timeframe, setupCandles, filters.join("; "), trends, ind, zoneAlert, progressive);
+
+  const resumptionSignal = trendResumptionSignal(symbol, mainTimeframe, setupCandles, triggerCandles, trends, setup, ind, options, zoneAlert);
+  if (resumptionSignal) return resumptionSignal;
 
   const triggerSignal = triggerEntrySignal(symbol, timeframe, setupCandles, triggerCandles, trends, setup, ind, options, zoneAlert);
   if (triggerSignal) return triggerSignal;
@@ -72,6 +78,162 @@ export function buildAnalysis(symbol, timeframe, candlesByTimeframe, options = {
   signal = enforceExecutableEntry(signal, setupCandles, ind, zoneAlert, options);
   if (zoneAlert) signal = { ...signal, ...zoneAlert };
   return signal;
+}
+
+function trendResumptionSignal(symbol, timeframe, setupCandles, triggerCandles, trends, setup, indicators, options, zoneAlert) {
+  const correction = detectarCorrecao(trends["15m"], setupCandles, indicators);
+  if (!correction?.resumed) return null;
+  if (!confirmarCandle1m(correction.direction, triggerCandles)) return null;
+
+  const direction = correction.direction === "compra" ? "LONG_SETUP" : "SHORT_SETUP";
+  const scored = directionScore(correction.direction, trends, setup, options);
+  const signal = createMicroRetomadaSignal(
+    direction,
+    symbol,
+    timeframe,
+    setupCandles,
+    trends,
+    indicators,
+    correction,
+    {
+      score: Math.max(88, Math.min(100, scored.score + 20)),
+      reasons: [
+        ...scored.reasons,
+        correction.label,
+        "volume do candle 5m acima da média das últimas 5 velas",
+        "vela de 1m confirmou a retomada na mesma direção",
+      ],
+    },
+  );
+  return zoneAlert ? { ...signal, ...zoneAlert } : signal;
+}
+
+export function detectarCorrecao(macroTrend, candles, indicators = calculateIndicators(candles)) {
+  const normalizedMacro = normalizeTrend(macroTrend);
+  if (!["bearish", "bullish"].includes(normalizedMacro) || candles.length < 8) return null;
+  const current = last(candles);
+  const correctionCandles = candles.slice(-4, -1);
+  if (correctionCandles.length < 3 || !current) return null;
+  const atrVal = indicators.atr || current.close * 0.01;
+  const avgVolume5 = candles.slice(-6, -1).reduce((sum, candle) => sum + candle.volume, 0) / Math.max(candles.slice(-6, -1).length, 1);
+  const volumeOk = current.volume > avgVolume5;
+
+  if (normalizedMacro === "bearish") {
+    const threeUp = correctionCandles.every((candle) => candle.close > candle.open)
+      && correctionCandles[2].close > correctionCandles[1].close
+      && correctionCandles[1].close > correctionCandles[0].close;
+    const moveUp = correctionCandles[2].close - correctionCandles[0].open;
+    const correctionDetected = threeUp || moveUp >= atrVal * 0.5;
+    const top = Math.max(...correctionCandles.map((candle) => candle.high));
+    const bottom = Math.min(...correctionCandles.map((candle) => candle.low));
+    const resumed = correctionDetected && current.close < bottom && current.close < current.open && volumeOk;
+    return {
+      type: "MICRO_RESISTENCIA",
+      direction: "venda",
+      resumed,
+      top,
+      bottom,
+      entry: current.close,
+      stop: top + atrVal * 0.1,
+      label: "correção contra tendência de baixa marcou micro-resistência e retomou venda",
+    };
+  }
+
+  const threeDown = correctionCandles.every((candle) => candle.close < candle.open)
+    && correctionCandles[2].close < correctionCandles[1].close
+    && correctionCandles[1].close < correctionCandles[0].close;
+  const moveDown = correctionCandles[0].open - correctionCandles[2].close;
+  const correctionDetected = threeDown || moveDown >= atrVal * 0.5;
+  const top = Math.max(...correctionCandles.map((candle) => candle.high));
+  const bottom = Math.min(...correctionCandles.map((candle) => candle.low));
+  const resumed = correctionDetected && current.close > top && current.close > current.open && volumeOk;
+  return {
+    type: "MICRO_SUPORTE",
+    direction: "compra",
+    resumed,
+    top,
+    bottom,
+    entry: current.close,
+    stop: bottom - atrVal * 0.1,
+    label: "correção contra tendência de alta marcou micro-suporte e retomou compra",
+  };
+}
+
+function confirmarCandle1m(direction, triggerCandles) {
+  if (!triggerCandles?.length) return false;
+  const candle = last(triggerCandles);
+  const previous = triggerCandles[triggerCandles.length - 2] ?? candle;
+  if (direction === "venda") return candle.close < candle.open && candle.close <= previous.close;
+  return candle.close > candle.open && candle.close >= previous.close;
+}
+
+function createMicroRetomadaSignal(decision, symbol, timeframe, candles, trends, indicators, correction, scored) {
+  const current = last(candles);
+  const long = decision === "LONG_SETUP";
+  const entryReference = correction.entry;
+  const entry = [entryReference, entryReference];
+  const stop = correction.stop;
+  const targets = calcularAlvos(entryReference, stop, long);
+  const message = long
+    ? `RETOMADA DE ALTA - Entre LONG em ${entryReference.toFixed(2)}. Stop abaixo do fundo da correção.`
+    : `RETOMADA DE BAIXA - Entre SHORT em ${entryReference.toFixed(2)}. Stop acima do topo da correção.`;
+  const confidence = scored.score >= 90 ? "muito alta" : "alta";
+  const risk = Math.max(Math.abs(entryReference - stop), 1e-9);
+  const reward = Math.abs(targets[2] - entryReference);
+  return {
+    id: `${symbol}:${timeframe}:RETOMADA:${decision}:${Math.round(entryReference)}:${Math.round(stop)}`,
+    timestamp: new Date(current.closeTime || current.time * 1000).toISOString(),
+    symbol,
+    timeframe,
+    decision,
+    score: scored.score,
+    price: entryReference,
+    trends,
+    reasons: scored.reasons,
+    prerequisites: [
+      "15m deve manter a direção macro",
+      "5m deve fechar retomando a tendência após a correção",
+      "1m deve confirmar fechamento na mesma direção",
+    ],
+    cancelConditions: long
+      ? ["fechamento abaixo do fundo da correção", "perda da tendência macro no 15m", "volume abaixo da média no rompimento"]
+      : ["fechamento acima do topo da correção", "perda da tendência macro no 15m", "volume abaixo da média no rompimento"],
+    entry,
+    stop,
+    targets,
+    riskReward: Number((reward / risk).toFixed(2)),
+    stopLossPercent: Math.abs((entryReference - stop) / entryReference) * 100,
+    gainPercent: Math.abs((targets[0] - entryReference) / entryReference) * 100,
+    support: indicators.support,
+    resistance: indicators.resistance,
+    supportZone: indicators.supportZone,
+    resistanceZone: indicators.resistanceZone,
+    demandZones: indicators.demandZones ?? [],
+    supplyZones: indicators.supplyZones ?? [],
+    microZone: correction,
+    poc: indicators.poc,
+    pocBias: indicators.pocBias,
+    volatility: indicators.volatility,
+    volumeRatio: indicators.volumeRatio,
+    confidence,
+    trendStrength: indicators.trendStrength?.label ?? "forte",
+    trendStrengthScore: indicators.trendStrength?.score ?? scored.score,
+    momentum: indicators.momentum ?? "retomada",
+    regime: indicators.regime ?? "trending",
+    narrative: `${symbol} acionou retomada de tendência no 5m com contexto macro de 15m e confirmação final no 1m.`,
+    candlePatterns: indicators.candlePatterns?.patterns?.map(patternLabel) ?? [],
+    divergences: { rsi: indicators.rsiDivergence ?? "none", macd: indicators.macdDivergence ?? "none" },
+    fibonacci: indicators.fibonacci ?? {},
+    adx: indicators.adx ?? 20,
+    stochRsi: indicators.stochRsi ?? {},
+    obv: indicators.obv ?? {},
+    rsi: indicators.rsi,
+    macdData: indicators.macd,
+    status: "Ativo",
+    alertType: "TREND_RESUMPTION",
+    alertMessage: message,
+    alertDirection: long ? "compra" : "venda",
+  };
 }
 
 export function classifyTrend(candles, indicators = calculateIndicators(candles)) {
@@ -422,15 +584,9 @@ export function confirmarEntrada(contextCandles, triggerCandles, contextIndicato
 
 function trendFollowingAllowed(direction, trends) {
   const wanted = direction === "compra" ? "bullish" : "bearish";
-  const opposite = direction === "compra" ? "bearish" : "bullish";
-  const setupTrend = normalizeTrend(trends["15m"]);
-  const triggerTrend = normalizeTrend(trends["5m"]);
-  const confirmationTrend = normalizeTrend(trends["1h"]);
-  const contextTrend = normalizeTrend(trends["4h"]);
-  return setupTrend === wanted
-    && triggerTrend === wanted
-    && confirmationTrend !== opposite
-    && contextTrend !== opposite;
+  const macroTrend = normalizeTrend(trends["15m"]);
+  const setupTrend = normalizeTrend(trends["5m"]);
+  return macroTrend === wanted && setupTrend === wanted;
 }
 
 export function verificarTimeStop(position, now = new Date()) {
@@ -558,8 +714,7 @@ export function enforceExecutableEntry(signal, candles, indicators = {}, zoneAle
 
 function isContinuationContext(trends, setupTrend, wanted) {
   return normalizeTrend(setupTrend) === wanted
-    && normalizeTrend(trends["1h"]) === wanted
-    && normalizeTrend(trends["4h"]) === wanted;
+    && normalizeTrend(trends["15m"]) === wanted;
 }
 
 function isDemandRejection(candle, indicators, demandZone) {
@@ -620,12 +775,9 @@ export function marketFilters(indicators, spread, options = {}) {
 }
 
 export function hasConflict(trends, setupTrend) {
-  const trend4h = normalizeTrend(trends["4h"]);
-  const trend1h = normalizeTrend(trends["1h"]);
+  const macro = normalizeTrend(trends["15m"]);
   const setup = normalizeTrend(setupTrend);
-  return (trend4h === "bullish" && trend1h === "bearish")
-    || (trend4h === "bearish" && trend1h === "bullish")
-    || (trend4h !== "sideways" && setup !== "sideways" && trend4h !== setup);
+  return macro !== "sideways" && setup !== "sideways" && macro !== setup;
 }
 
 function zoneAlertSignal(candles, indicators) {
@@ -778,7 +930,7 @@ export function waitSignal(symbol, timeframe, candles, reason, trends = {}, indi
     phase: scoreState.phase,
     phaseLabel: scoreState.phaseLabel,
     price: current.close,
-    trends: { "4h": trends["4h"] ?? "sideways", "1h": trends["1h"] ?? "sideways", "15m": trends["15m"] ?? "sideways", "5m": trends["5m"] ?? "sideways" },
+    trends: { "4h": trends["4h"] ?? "sideways", "1h": trends["1h"] ?? "sideways", "15m": trends["15m"] ?? "sideways", "5m": trends["5m"] ?? "sideways", "1m": trends["1m"] ?? "sideways" },
     reasons: [reason, ...(scoreState.reasons ?? [])],
     prerequisites: ["aguardar fechamento com confirmação de tendência, volume e risco/retorno"],
     cancelConditions: ["volume insuficiente", "conflito entre períodos", "relação risco/retorno inadequada"],

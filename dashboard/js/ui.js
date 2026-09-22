@@ -1,10 +1,10 @@
-import { createAlertManager } from "./alerts.js?v=20260915-entry-guard";
-import { createMarketChart } from "./chart.js?v=20260915-entry-guard";
-import { calculateIndicators, last } from "./indicators.js?v=20260915-entry-guard";
-import { getMarketClock } from "./marketClock.js?v=20260915-entry-guard";
-import { closedCandles, createKlineSocket, demoCandles, demoForexQuotes, fetchBackendSignal, fetchForexQuotes, fetchInitialCandles, fetchLocalCandles, makeDemoFeed, mergeCandle } from "./marketData.js?v=20260915-entry-guard";
-import { buildAnalysis } from "./signalEngine.js?v=20260915-entry-guard";
-import { clearHistory, loadHistory, loadPrefs, savePrefs, saveSignal } from "./storage.js?v=20260915-entry-guard";
+import { createAlertManager } from "./alerts.js?v=20260922-daytrade-retomada";
+import { createMarketChart } from "./chart.js?v=20260922-daytrade-retomada";
+import { calculateIndicators, last } from "./indicators.js?v=20260922-daytrade-retomada";
+import { getMarketClock } from "./marketClock.js?v=20260922-daytrade-retomada";
+import { closedCandles, createKlineSocket, demoCandles, demoForexQuotes, fetchBackendSignal, fetchForexQuotes, fetchInitialCandles, fetchLocalCandles, makeDemoFeed, mergeCandle } from "./marketData.js?v=20260922-daytrade-retomada";
+import { buildAnalysis } from "./signalEngine.js?v=20260922-daytrade-retomada";
+import { clearHistory, loadHistory, loadPrefs, savePrefs, saveSignal } from "./storage.js?v=20260922-daytrade-retomada";
 
 const FOREX_PAIRS = Object.freeze(["EUR/USD", "USD/JPY", "GBP/USD"]);
 
@@ -58,7 +58,7 @@ const els = {
 };
 
 let chart;
-let socket;
+let sockets = [];
 let candlesByTimeframe = {};
 let activeSignal;
 let lastBackendFetch = 0;
@@ -71,7 +71,7 @@ init();
 async function init() {
   const prefs = loadPrefs();
   els.symbolSelect.value = prefs.symbol ?? "BTCUSDT";
-  els.timeframeSelect.value = prefs.timeframe ?? "15m";
+  els.timeframeSelect.value = prefs.timeframe ?? "5m";
   els.scoreFilter.value = prefs.minScore ?? "0";
   els.signalFilter.value = prefs.signalType ?? "ALL";
   els.demoToggle.checked = Boolean(prefs.demo);
@@ -111,7 +111,7 @@ function bindEvents() {
 }
 
 async function restart() {
-  socket?.close();
+  closeSockets();
   savePrefs(currentPrefs());
   setState("loading", "Carregando");
   const symbol = els.symbolSelect.value;
@@ -127,32 +127,46 @@ async function restart() {
     hideChartNotice();
     if (els.demoToggle.checked) {
       candlesByTimeframe = {
+        "1m": demoCandles(320),
         "5m": demoCandles(320),
         "15m": demoCandles(320),
         "1h": demoCandles(320),
         "4h": demoCandles(320),
       };
-      socket = makeDemoFeed({
+      sockets = [makeDemoFeed({
         interval: timeframe,
         onStatus: setConnection,
         onCandle: (candle) => handleCandle(timeframe, candle),
-      });
+      })];
     } else {
-      const frames = ["5m", "15m", "1h", "4h"];
+      const frames = ["1m", "5m", "15m", "1h", "4h"];
       const rows = await Promise.all(frames.map((frame) => loadCandles(symbol, frame, 320)));
       candlesByTimeframe = Object.fromEntries(frames.map((frame, index) => [frame, rows[index]]));
-      socket = createKlineSocket({
+      sockets = [createKlineSocket({
         symbol,
         interval: timeframe,
         onStatus: setConnection,
         onCandle: (candle) => handleCandle(timeframe, candle),
-      });
+      })];
+      if (timeframe !== "1m") {
+        sockets.push(createKlineSocket({
+          symbol,
+          interval: "1m",
+          onStatus: setConnection,
+          onCandle: (candle) => handleCandle("1m", candle),
+        }));
+      }
     }
     refresh();
   } catch (error) {
     setConnection("error");
     setState("error", `Erro na API: ${translateMessage(error.message)}`);
   }
+}
+
+function closeSockets() {
+  for (const item of sockets) item?.close?.();
+  sockets = [];
 }
 
 async function loadCandles(symbol, frame, limit) {

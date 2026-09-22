@@ -122,9 +122,9 @@ class MarketAnalyzer:
         }
         self.timeframes = {
             "context": getattr(config, "CONTEXT_TIMEFRAME", "4h"),
-            "confirmation": getattr(config, "CONFIRMATION_TIMEFRAME", "1h"),
-            "setup": getattr(config, "SETUP_TIMEFRAME", "15m"),
-            "refinement": getattr(config, "REFINEMENT_TIMEFRAME", "5m"),
+            "confirmation": getattr(config, "CONFIRMATION_TIMEFRAME", "15m"),
+            "setup": getattr(config, "SETUP_TIMEFRAME", "5m"),
+            "refinement": getattr(config, "REFINEMENT_TIMEFRAME", "1m"),
         }
         self.analyses = self._analyze_timeframes()
 
@@ -145,6 +145,10 @@ class MarketAnalyzer:
             return self._wait(price, timestamp, trends, dominant, filter_reasons, zone_alert)
         if bool(ind.get("false_breakout_up")):
             return self._invalidated(price, timestamp, trends, dominant, ["falso rompimento no periodo de setup"])
+
+        resumption_signal = self._correction_resumption_signal(trends, zone_alert)
+        if resumption_signal:
+            return resumption_signal
 
         trigger_signal = self._entry_trigger_signal(price, timestamp, trends, zone_alert)
         if trigger_signal:
@@ -258,20 +262,15 @@ class MarketAnalyzer:
         return not reasons, reasons
 
     def _has_major_conflict(self) -> bool:
-        context = self.analyses[self.timeframes["context"]].trend
         confirmation = self.analyses[self.timeframes["confirmation"]].trend
         setup = self.analyses[self.timeframes["setup"]].trend
-        return (
-            context == Trend.BULLISH and confirmation == Trend.BEARISH
-            or context == Trend.BEARISH and confirmation == Trend.BULLISH
-            or setup != Trend.SIDEWAYS and context != Trend.SIDEWAYS and setup != context
-        )
+        return setup != Trend.SIDEWAYS and confirmation != Trend.SIDEWAYS and setup != confirmation
 
     def _dominant_direction(self) -> str:
-        context = self.analyses[self.timeframes["context"]].trend
         confirmation = self.analyses[self.timeframes["confirmation"]].trend
-        if context == confirmation and context != Trend.SIDEWAYS:
-            return "alta" if context == Trend.BULLISH else "baixa"
+        setup = self.analyses[self.timeframes["setup"]].trend
+        if confirmation == setup and setup != Trend.SIDEWAYS:
+            return "alta" if setup == Trend.BULLISH else "baixa"
         return "indefinida"
 
     # =========================================================================
@@ -467,6 +466,177 @@ class MarketAnalyzer:
             )
         return signal
 
+    def _correction_resumption_signal(
+        self,
+        trends: Dict[str, str],
+        zone_alert: Dict | None,
+    ) -> MarketSignal | None:
+        setup_tf = self.timeframes["setup"]
+        trigger_tf = self.timeframes["refinement"]
+        confirmation_tf = self.timeframes["confirmation"]
+        if setup_tf not in self.candles_by_timeframe or trigger_tf not in self.candles_by_timeframe:
+            return None
+        setup_df = self.candles_by_timeframe[setup_tf]
+        trigger_df = self.candles_by_timeframe[trigger_tf]
+        if len(setup_df) < 8 or trigger_df.empty:
+            return None
+        macro = self.analyses.get(confirmation_tf)
+        if macro is None or macro.trend not in {Trend.BEARISH, Trend.BULLISH}:
+            return None
+
+        setup_ind = self.analyses[setup_tf].indicators
+        atr = Decimal(str(setup_ind.get("atr", 0))) or Decimal(str(setup_df["close"].iloc[-1])) * Decimal("0.01")
+        correction_rows = setup_df.iloc[-4:-1]
+        current = setup_df.iloc[-1]
+        avg_volume_5 = Decimal(str(setup_df["volume"].iloc[-6:-1].mean())) if len(setup_df) >= 6 else Decimal(str(setup_df["volume"].tail(5).mean()))
+        volume_ok = Decimal(str(current["volume"])) > avg_volume_5
+        trigger_ok = self._confirm_1m_direction(macro.trend, trigger_df)
+        if not trigger_ok or not volume_ok:
+            return None
+
+        opens = [Decimal(str(value)) for value in correction_rows["open"]]
+        closes = [Decimal(str(value)) for value in correction_rows["close"]]
+        highs = [Decimal(str(value)) for value in correction_rows["high"]]
+        lows = [Decimal(str(value)) for value in correction_rows["low"]]
+        current_close = Decimal(str(current["close"]))
+        current_open = Decimal(str(current["open"]))
+        timestamp = current["close_time"].isoformat()
+
+        if macro.trend == Trend.BEARISH:
+            three_up = all(closes[i] > opens[i] for i in range(3)) and closes[2] > closes[1] > closes[0]
+            move_up = closes[2] - opens[0]
+            correction_detected = three_up or move_up >= atr * Decimal("0.5")
+            top = max(highs)
+            bottom = min(lows)
+            resumed = correction_detected and current_close < bottom and current_close < current_open
+            if not resumed:
+                return None
+            return self._build_micro_resumption_signal(
+                AnalysisDecision.SHORT_SETUP,
+                current_close,
+                timestamp,
+                trends,
+                top,
+                bottom,
+                atr,
+                zone_alert,
+            )
+
+        three_down = all(closes[i] < opens[i] for i in range(3)) and closes[2] < closes[1] < closes[0]
+        move_down = opens[0] - closes[2]
+        correction_detected = three_down or move_down >= atr * Decimal("0.5")
+        top = max(highs)
+        bottom = min(lows)
+        resumed = correction_detected and current_close > top and current_close > current_open
+        if not resumed:
+            return None
+        return self._build_micro_resumption_signal(
+            AnalysisDecision.LONG_SETUP,
+            current_close,
+            timestamp,
+            trends,
+            top,
+            bottom,
+            atr,
+            zone_alert,
+        )
+
+    def _confirm_1m_direction(self, macro_trend: Trend, trigger_df: pd.DataFrame) -> bool:
+        if trigger_df.empty:
+            return False
+        candle = trigger_df.iloc[-1]
+        previous = trigger_df.iloc[-2] if len(trigger_df) >= 2 else candle
+        close = Decimal(str(candle["close"]))
+        open_ = Decimal(str(candle["open"]))
+        previous_close = Decimal(str(previous["close"]))
+        if macro_trend == Trend.BEARISH:
+            return close < open_ and close <= previous_close
+        if macro_trend == Trend.BULLISH:
+            return close > open_ and close >= previous_close
+        return False
+
+    def _build_micro_resumption_signal(
+        self,
+        decision: AnalysisDecision,
+        price: Decimal,
+        timestamp: str,
+        trends: Dict[str, str],
+        top: Decimal,
+        bottom: Decimal,
+        atr: Decimal,
+        zone_alert: Dict | None,
+    ) -> MarketSignal:
+        ind = self.analyses[self.timeframes["setup"]].indicators
+        long = decision == AnalysisDecision.LONG_SETUP
+        stop = bottom - atr * Decimal("0.1") if long else top + atr * Decimal("0.1")
+        targets = self._calcular_alvos(price, stop, long=long)
+        risk = max(abs(price - stop), Decimal("0.00000001"))
+        rr = (abs(targets[2] - price) / risk).quantize(Decimal("0.01"))
+        score_base, reasons = self._direction_score(Trend.BULLISH if long else Trend.BEARISH)
+        score = max(88, min(100, score_base + 20))
+        direction_label = "alta" if long else "baixa"
+        side_label = "LONG" if long else "SHORT"
+        message = (
+            f"RETOMADA DE ALTA — Entre LONG em {price}. Stop abaixo do fundo da correcao."
+            if long
+            else f"RETOMADA DE BAIXA — Entre SHORT em {price}. Stop acima do topo da correcao."
+        )
+        reasons = [
+            *reasons,
+            f"15m confirma tendencia macro de {direction_label}",
+            "5m detectou correcao contra a tendencia",
+            "5m fechou retomando a direcao com volume acima da media de 5 velas",
+            "1m confirmou fechamento na mesma direcao",
+        ]
+        signal = MarketSignal(
+            symbol=self.symbol,
+            timestamp=timestamp,
+            current_price=price,
+            dominant_direction=direction_label,
+            timeframe_trends=trends,
+            score=score,
+            decision=decision,
+            reasons=reasons,
+            ideal_entry_region=(price, price),
+            stop_loss=stop,
+            target_1=targets[0],
+            target_2=targets[1],
+            target_3=targets[2],
+            risk_reward=rr,
+            invalidation_level=stop,
+            prerequisites=[
+                "15m deve manter a direcao macro",
+                "5m deve fechar alem da micro-zona de correcao",
+                "1m deve confirmar fechamento na mesma direcao",
+            ],
+            cancel_conditions=[
+                "fechamento contra a micro-zona de correcao",
+                "perda da tendencia macro no 15m",
+                "volume abaixo da media no candle de retomada",
+            ],
+            confidence_level=self._classify_confidence(score, ind),
+            trend_strength=str(ind.get("trend_strength", "forte")),
+            momentum="retomada",
+            market_regime=str(ind.get("market_regime", "trending")),
+            narrative=f"{self.symbol} acionou retomada de {direction_label} no 5m com contexto 15m e confirmacao final no 1m.",
+            key_levels={
+                **self._build_key_levels(ind, price, price, stop, targets),
+                "micro_zona": {"tipo": "micro_suporte" if long else "micro_resistencia", "topo": str(top), "fundo": str(bottom)},
+            },
+            candle_patterns=ind.get("candle_patterns", []),
+            divergences={
+                "rsi": str(ind.get("rsi_divergence", "none")),
+                "macd": str(ind.get("macd_divergence", "none")),
+            },
+            detailed_indicators=self._extract_detailed_indicators(ind),
+            alert_type="TREND_RESUMPTION",
+            alert_message=message,
+            alert_direction="compra" if long else "venda",
+        )
+        if zone_alert and zone_alert.get("priority", 0) > 3:
+            return replace(signal, alert_type=zone_alert["type"], alert_message=zone_alert["message"], alert_direction=zone_alert["direction"])
+        return signal
+
     def _confirmar_entrada(self, setup_candle: pd.Series, trigger_candle: pd.Series, setup_ind: Dict, trigger_ind: Dict) -> Dict:
         close_15 = Decimal(str(setup_candle["close"]))
         atr = Decimal(str(setup_ind.get("atr", 0))) or close_15 * Decimal("0.01")
@@ -513,14 +683,11 @@ class MarketAnalyzer:
         setup = self.analyses[self.timeframes["setup"]].trend
         refinement = self.analyses.get(self.timeframes["refinement"])
         confirmation = self.analyses[self.timeframes["confirmation"]].trend
-        context = self.analyses[self.timeframes["context"]].trend
         refinement_trend = refinement.trend if refinement else Trend.SIDEWAYS
-        opposite = Trend.BEARISH if direction == Trend.BULLISH else Trend.BULLISH
         return (
-            setup == direction
-            and refinement_trend == direction
-            and confirmation != opposite
-            and context != opposite
+            confirmation == direction
+            and setup == direction
+            and refinement_trend in {direction, Trend.SIDEWAYS}
         )
 
     def _reversal_zone_signal(
@@ -632,10 +799,9 @@ class MarketAnalyzer:
         return signal
 
     def _is_continuation_context(self, direction: Trend) -> bool:
-        context = self.analyses[self.timeframes["context"]].trend
         confirmation = self.analyses[self.timeframes["confirmation"]].trend
         setup = self.analyses[self.timeframes["setup"]].trend
-        return setup == direction and confirmation == direction and context == direction
+        return setup == direction and confirmation == direction
 
     def _is_demand_rejection(self, candle: pd.Series, ind: Dict, demand_zone: Dict) -> bool:
         close = Decimal(str(candle["close"]))

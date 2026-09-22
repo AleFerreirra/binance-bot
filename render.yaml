@@ -18,13 +18,13 @@ services:
       - key: WATCHLIST_SYMBOLS
         value: BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT
       - key: SETUP_TIMEFRAME
-        value: 15m
+        value: 5m
       - key: CONTEXT_TIMEFRAME
         value: 4h
       - key: CONFIRMATION_TIMEFRAME
-        value: 1h
+        value: 15m
       - key: REFINEMENT_TIMEFRAME
-        value: 5m
+        value: 1m
       - key: CHECK_INTERVAL
         value: "180"
       - key: BINANCE_PUBLIC_BASE_URL
@@ -52,13 +52,13 @@ services:
       - key: WATCHLIST_SYMBOLS
         value: BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT
       - key: SETUP_TIMEFRAME
-        value: 15m
+        value: 5m
       - key: CONTEXT_TIMEFRAME
         value: 4h
       - key: CONFIRMATION_TIMEFRAME
-        value: 1h
+        value: 15m
       - key: REFINEMENT_TIMEFRAME
-        value: 5m
+        value: 1m
       - key: CHECK_INTERVAL
         value: "180"
       - key: BINANCE_PUBLIC_BASE_URL

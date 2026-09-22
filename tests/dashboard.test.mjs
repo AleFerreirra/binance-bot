@@ -280,6 +280,43 @@ test("day trade bloqueia compra quando 5m esta contra a tendencia", () => {
   assert.equal(signal.decision, "WAIT");
 });
 
+test("retomada de baixa usa 15m contexto 5m setup e 1m confirmacao", () => {
+  const macroDown = candles(260, -1).map((candle, index) => {
+    const open = 1000 - index * 1.2;
+    const close = open - 1;
+    return { ...candle, open, high: open + 1, low: close - 1, close };
+  });
+  const fiveMinute = candles(260, -1);
+  const oneMinute = candles(260, -1);
+  const baseTime = fiveMinute.at(-4).time;
+  fiveMinute.splice(-4, 4,
+    { time: baseTime, open: 100, high: 101.2, low: 99.8, close: 101, volume: 1000, closeTime: baseTime * 1000 },
+    { time: baseTime + 300, open: 101, high: 102.2, low: 100.8, close: 102, volume: 1000, closeTime: (baseTime + 300) * 1000 },
+    { time: baseTime + 600, open: 102, high: 103.5, low: 101.8, close: 103, volume: 1000, closeTime: (baseTime + 600) * 1000 },
+    { time: baseTime + 900, open: 102.8, high: 103.1, low: 98.7, close: 99.2, volume: 1800, closeTime: (baseTime + 900) * 1000 },
+  );
+  oneMinute.splice(-2, 2,
+    { time: baseTime + 840, open: 100.3, high: 100.6, low: 99.8, close: 100.1, volume: 900, closeTime: (baseTime + 840) * 1000 },
+    { time: baseTime + 900, open: 100.1, high: 100.2, low: 98.9, close: 99.1, volume: 1100, closeTime: (baseTime + 900) * 1000 },
+  );
+
+  const signal = buildAnalysis("BTCUSDT", "5m", {
+    "1m": oneMinute,
+    "5m": fiveMinute,
+    "15m": macroDown,
+    "1h": macroDown,
+    "4h": macroDown,
+  }, {
+    entryToleranceAtr: 999999,
+    maxVolatility: 1,
+  });
+
+  assert.equal(signal.decision, "SHORT_SETUP");
+  assert.equal(signal.alertType, "TREND_RESUMPTION");
+  assert.ok(signal.alertMessage.includes("RETOMADA DE BAIXA"));
+  assert.ok(signal.stop > signal.price);
+});
+
 test("stop loss respeita distancia minima configurada", () => {
   const data = candles();
   const signal = createDirectional(

@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parent
 DASHBOARD_DIR = ROOT / "dashboard"
 LOCAL_HOST = "127.0.0.1"
 PRODUCTION_HOST = "0.0.0.0"
-ALLOWED_TIMEFRAMES = {"5m", "15m", "1h", "4h"}
+ALLOWED_TIMEFRAMES = {"1m", "5m", "15m", "1h", "4h"}
 
 
 def is_production() -> bool:
@@ -32,11 +32,12 @@ def runtime_port(config: Config) -> int:
 
 
 def selected_config(config: Config, timeframe: str) -> Config:
-    """Validate chart timeframe while keeping day-trade setup on 15m and trigger on 5m."""
+    """Validate chart timeframe while keeping 15m as context, 5m as setup and 1m as trigger."""
     if timeframe not in ALLOWED_TIMEFRAMES:
         raise ValueError(f"timeframe invalido: {timeframe}")
-    config.SETUP_TIMEFRAME = "15m"
-    config.REFINEMENT_TIMEFRAME = "5m"
+    config.CONFIRMATION_TIMEFRAME = "15m"
+    config.SETUP_TIMEFRAME = "5m"
+    config.REFINEMENT_TIMEFRAME = "1m"
     return config
 
 
