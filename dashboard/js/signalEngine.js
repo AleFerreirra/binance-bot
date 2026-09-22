@@ -367,7 +367,8 @@ function triggerEntrySignal(symbol, timeframe, setupCandles, triggerCandles, tre
     },
     options,
   );
-  return zoneAlert ? { ...signal, ...zoneAlert } : signal;
+  const executable = enforceExecutableEntry(signal, triggerCandles, indicators, zoneAlert, options);
+  return zoneAlert ? { ...executable, ...zoneAlert } : executable;
 }
 
 export function confirmarEntrada(contextCandles, triggerCandles, contextIndicators, triggerIndicators = calculateIndicators(triggerCandles)) {

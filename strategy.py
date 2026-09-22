@@ -167,10 +167,17 @@ class MarketAnalyzer:
         setup_regime = str(self.analyses[self.timeframes["setup"]].indicators.get("market_regime", "ranging"))
         score_threshold = 60 if setup_regime in ("ranging", "volatile") else 70
 
-        if score_long >= score_short and score_long >= score_threshold:
+        if score_long > score_short and score_long >= score_threshold:
             signal = self._build_directional_signal(AnalysisDecision.LONG_SETUP, price, timestamp, trends, score_long, long_reasons)
         elif score_short > score_long and score_short >= score_threshold:
             signal = self._build_directional_signal(AnalysisDecision.SHORT_SETUP, price, timestamp, trends, score_short, short_reasons)
+        elif score_long == score_short and score_long >= score_threshold:
+            if dominant == "baixa":
+                signal = self._build_directional_signal(AnalysisDecision.SHORT_SETUP, price, timestamp, trends, score_short, short_reasons)
+            elif dominant == "alta":
+                signal = self._build_directional_signal(AnalysisDecision.LONG_SETUP, price, timestamp, trends, score_long, long_reasons)
+            else:
+                return self._wait(price, timestamp, trends, dominant, ["scores empatados com direcao indefinida"], zone_alert)
         else:
             return self._wait(price, timestamp, trends, dominant, long_reasons + short_reasons or ["sem confirmacao suficiente"], zone_alert)
 
@@ -397,6 +404,17 @@ class MarketAnalyzer:
         if direction == Trend.BEARISH and rsi < 20:
             score -= 8
             reasons.append(f"RSI sobrevendido ({rsi:.0f}): risco de reversao")
+
+        # --- Penalty: recent price action against direction (-12) ---
+        refinement_tf = self.timeframes["refinement"]
+        if refinement_tf in self.analyses:
+            ref_trend = self.analyses[refinement_tf].trend
+            if direction == Trend.BULLISH and ref_trend == Trend.BEARISH:
+                score -= 12
+                reasons.append("acao de preco recente contra direcao de compra")
+            elif direction == Trend.BEARISH and ref_trend == Trend.BULLISH:
+                score -= 12
+                reasons.append("acao de preco recente contra direcao de venda")
 
         return min(max(score, 0), 100), reasons
 
@@ -747,7 +765,10 @@ class MarketAnalyzer:
             ]
             cancel = ["fechamento acima do stop tecnico", "recuperacao do contexto de 4h/1h", "spread ou liquidez fora do filtro", "time stop: 4h sem atingir alvo 1 ou fechamento as 22h BRT"]
 
-        rr = Decimal("2.00")
+        entry_mid = (entry_low + entry_high) / Decimal("2")
+        risk = max(abs(entry_mid - stop), Decimal("0.00000001"))
+        reward = abs(targets[0] - entry_mid)
+        rr = (reward / risk).quantize(Decimal("0.01"))
         dominant = "alta" if decision == AnalysisDecision.LONG_SETUP else "baixa"
 
         # Classify confidence
