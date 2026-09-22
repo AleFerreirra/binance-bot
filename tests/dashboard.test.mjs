@@ -267,7 +267,7 @@ test("motor de sinal sai de aguardar quando ha confluencia suficiente", () => {
   assert.ok(signal.score >= 70);
 });
 
-test("day trade usa 15m como contexto mesmo com filtro em 5m", () => {
+test("day trade bloqueia compra quando 5m esta contra a tendencia", () => {
   const up = candles(260, 1);
   const down = candles(260, -1);
   const signal = buildAnalysis("BTCUSDT", "5m", { "5m": down, "15m": up, "1h": up, "4h": up }, {
@@ -277,8 +277,7 @@ test("day trade usa 15m como contexto mesmo com filtro em 5m", () => {
   });
   assert.equal(signal.timeframe, "5m");
   assert.notEqual(signal.trends["5m"], signal.trends["15m"]);
-  assert.ok(signal.reasons.some((reason) => reason.includes("contexto 15m") || reason.includes("gatilho 5m")));
-  assert.notEqual(signal.decision, "WAIT");
+  assert.equal(signal.decision, "WAIT");
 });
 
 test("stop loss respeita distancia minima configurada", () => {

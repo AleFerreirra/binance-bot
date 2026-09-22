@@ -167,14 +167,17 @@ class MarketAnalyzer:
         setup_regime = str(self.analyses[self.timeframes["setup"]].indicators.get("market_regime", "ranging"))
         score_threshold = 60 if setup_regime in ("ranging", "volatile") else 70
 
-        if score_long > score_short and score_long >= score_threshold:
+        long_allowed = self._trend_following_allowed(Trend.BULLISH)
+        short_allowed = self._trend_following_allowed(Trend.BEARISH)
+
+        if score_long > score_short and score_long >= score_threshold and long_allowed:
             signal = self._build_directional_signal(AnalysisDecision.LONG_SETUP, price, timestamp, trends, score_long, long_reasons)
-        elif score_short > score_long and score_short >= score_threshold:
+        elif score_short > score_long and score_short >= score_threshold and short_allowed:
             signal = self._build_directional_signal(AnalysisDecision.SHORT_SETUP, price, timestamp, trends, score_short, short_reasons)
         elif score_long == score_short and score_long >= score_threshold:
-            if dominant == "baixa":
+            if dominant == "baixa" and short_allowed:
                 signal = self._build_directional_signal(AnalysisDecision.SHORT_SETUP, price, timestamp, trends, score_short, short_reasons)
-            elif dominant == "alta":
+            elif dominant == "alta" and long_allowed:
                 signal = self._build_directional_signal(AnalysisDecision.LONG_SETUP, price, timestamp, trends, score_long, long_reasons)
             else:
                 return self._wait(price, timestamp, trends, dominant, ["scores empatados com direcao indefinida"], zone_alert)
@@ -440,6 +443,8 @@ class MarketAnalyzer:
             return None
 
         direction = Trend.BULLISH if confirmation["direction"] == "compra" else Trend.BEARISH
+        if not self._trend_following_allowed(direction):
+            return None
         decision = AnalysisDecision.LONG_SETUP if direction == Trend.BULLISH else AnalysisDecision.SHORT_SETUP
         trigger_price = Decimal(str(trigger_df["close"].iloc[-1]))
         trigger_timestamp = trigger_df["close_time"].iloc[-1].isoformat()
@@ -478,10 +483,13 @@ class MarketAnalyzer:
         volume_ok = Decimal(str(trigger_ind.get("volume_ratio", 0))) >= Decimal("1")
         bullish_pattern = lower_wick > body * Decimal("0.5") or {"pin_bar_bullish", "bullish_engulfing"} & patterns
         bearish_pattern = upper_wick > body * Decimal("0.5") or {"pin_bar_bearish", "bearish_engulfing"} & patterns
+        ma_trend = str(trigger_ind.get("ma_trend", "neutral"))
+        bullish_trend = ma_trend.startswith("bullish") and close_5 > open_5
+        bearish_trend = ma_trend.startswith("bearish") and close_5 < open_5
 
         near_demand = demand and abs(close_15 - Decimal(str(demand["upper"]))) <= atr
         near_supply = supply and abs(close_15 - Decimal(str(supply["lower"]))) <= atr
-        if near_demand and bullish_pattern and volume_ok:
+        if near_demand and bullish_pattern and bullish_trend and volume_ok:
             return {
                 "valid": True,
                 "direction": "compra",
@@ -490,7 +498,7 @@ class MarketAnalyzer:
                     "gatilho 5m confirmou padrao comprador com volume",
                 ],
             }
-        if near_supply and bearish_pattern and volume_ok:
+        if near_supply and bearish_pattern and bearish_trend and volume_ok:
             return {
                 "valid": True,
                 "direction": "venda",
@@ -501,6 +509,20 @@ class MarketAnalyzer:
             }
         return {"valid": False, "reasons": ["gatilho 5m ainda sem padrao e volume confirmados"]}
 
+    def _trend_following_allowed(self, direction: Trend) -> bool:
+        setup = self.analyses[self.timeframes["setup"]].trend
+        refinement = self.analyses.get(self.timeframes["refinement"])
+        confirmation = self.analyses[self.timeframes["confirmation"]].trend
+        context = self.analyses[self.timeframes["context"]].trend
+        refinement_trend = refinement.trend if refinement else Trend.SIDEWAYS
+        opposite = Trend.BEARISH if direction == Trend.BULLISH else Trend.BULLISH
+        return (
+            setup == direction
+            and refinement_trend == direction
+            and confirmation != opposite
+            and context != opposite
+        )
+
     def _reversal_zone_signal(
         self,
         price: Decimal,
@@ -508,6 +530,8 @@ class MarketAnalyzer:
         trends: Dict[str, str],
         zone_alert: Dict | None,
     ) -> MarketSignal | None:
+        if not self._trend_following_allowed(Trend.BULLISH):
+            return None
         setup_ind = self.analyses[self.timeframes["setup"]].indicators
         setup_df = self.candles_by_timeframe[self.timeframes["setup"]]
         demand_zone = setup_ind.get("nearest_demand_zone")

@@ -4,7 +4,7 @@ from datetime import datetime, timezone, timedelta
 import pandas as pd
 import pytest
 
-from strategy import AnalysisDecision, MarketAnalyzer
+from strategy import AnalysisDecision, MarketAnalyzer, TimeframeAnalysis, Trend
 from indicators import TechnicalIndicators
 
 
@@ -200,6 +200,23 @@ def test_backend_blocks_signal_outside_executable_entry_zone():
     assert blocked.decision == AnalysisDecision.WAIT
     assert blocked.score <= 59
     assert "fora da zona executavel" in blocked.reasons[0]
+
+
+def test_backend_disallows_long_when_5m_trend_is_bearish():
+    analyzer = MarketAnalyzer(
+        "BNBUSDT",
+        {"4h": candles(), "1h": candles(), "15m": candles(), "5m": candles()},
+        DummyConfig,
+        spread_percent=Decimal("0.001"),
+    )
+    current = analyzer.analyses["5m"]
+    analyzer.analyses["5m"] = TimeframeAnalysis(
+        timeframe=current.timeframe,
+        trend=Trend.BEARISH,
+        structure=current.structure,
+        indicators=current.indicators,
+    )
+    assert not analyzer._trend_following_allowed(Trend.BULLISH)
 
 
 def test_time_stop_flags_position_after_four_hours_without_target():

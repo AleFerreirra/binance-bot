@@ -56,9 +56,9 @@ export function buildAnalysis(symbol, timeframe, candlesByTimeframe, options = {
   const long = directionScore("compra", trends, setup, options);
   const short = directionScore("venda", trends, setup, options);
   let signal;
-  if (long.score >= short.score && long.score >= 70) {
+  if (long.score >= short.score && long.score >= 70 && trendFollowingAllowed("compra", trends)) {
     signal = createDirectional("LONG_SETUP", symbol, timeframe, setupCandles, trends, ind, long, options);
-  } else if (short.score > long.score && short.score >= 70) {
+  } else if (short.score > long.score && short.score >= 70 && trendFollowingAllowed("venda", trends)) {
     signal = createDirectional("SHORT_SETUP", symbol, timeframe, setupCandles, trends, ind, short, options);
   } else {
     return waitSignal(symbol, timeframe, setupCandles, "AGUARDAR - não há entrada válida neste momento", trends, ind, zoneAlert, progressive);
@@ -352,6 +352,7 @@ function triggerEntrySignal(symbol, timeframe, setupCandles, triggerCandles, tre
   const triggerIndicators = calculateIndicators(triggerCandles);
   const trigger = confirmarEntrada(setupCandles, triggerCandles, indicators, triggerIndicators);
   if (!trigger.valid) return null;
+  if (!trendFollowingAllowed(trigger.direction, trends)) return null;
   const direction = trigger.direction === "compra" ? "LONG_SETUP" : "SHORT_SETUP";
   const scored = directionScore(trigger.direction, trends, setup, options);
   const signal = createDirectional(
@@ -379,6 +380,7 @@ export function confirmarEntrada(contextCandles, triggerCandles, contextIndicato
   const demand = contextIndicators.supportZone;
   const supply = contextIndicators.resistanceZone;
   const volumeOk = (triggerIndicators.volumeRatio ?? 0) >= 1;
+  const wantedTrend = triggerIndicators.maTrend ?? "neutral";
   const body = Math.max(Math.abs(triggerCandle.close - triggerCandle.open), 1e-9);
   const lowerWick = Math.min(triggerCandle.close, triggerCandle.open) - triggerCandle.low;
   const upperWick = triggerCandle.high - Math.max(triggerCandle.close, triggerCandle.open);
@@ -392,7 +394,10 @@ export function confirmarEntrada(contextCandles, triggerCandles, contextIndicato
   const nearDemand = demand && Math.abs(contextCandle.close - demand.upper) <= atrVal;
   const nearSupply = supply && Math.abs(contextCandle.close - supply.lower) <= atrVal;
 
-  if (nearDemand && bullishPattern && volumeOk) {
+  const bullishTrend = wantedTrend.startsWith("bullish") && triggerCandle.close > triggerCandle.open;
+  const bearishTrend = wantedTrend.startsWith("bearish") && triggerCandle.close < triggerCandle.open;
+
+  if (nearDemand && bullishPattern && bullishTrend && volumeOk) {
     return {
       valid: true,
       direction: "compra",
@@ -402,7 +407,7 @@ export function confirmarEntrada(contextCandles, triggerCandles, contextIndicato
       ],
     };
   }
-  if (nearSupply && bearishPattern && volumeOk) {
+  if (nearSupply && bearishPattern && bearishTrend && volumeOk) {
     return {
       valid: true,
       direction: "venda",
@@ -413,6 +418,19 @@ export function confirmarEntrada(contextCandles, triggerCandles, contextIndicato
     };
   }
   return { valid: false, reasons: ["gatilho 5m ainda sem padrão e volume confirmados"] };
+}
+
+function trendFollowingAllowed(direction, trends) {
+  const wanted = direction === "compra" ? "bullish" : "bearish";
+  const opposite = direction === "compra" ? "bearish" : "bullish";
+  const setupTrend = normalizeTrend(trends["15m"]);
+  const triggerTrend = normalizeTrend(trends["5m"]);
+  const confirmationTrend = normalizeTrend(trends["1h"]);
+  const contextTrend = normalizeTrend(trends["4h"]);
+  return setupTrend === wanted
+    && triggerTrend === wanted
+    && confirmationTrend !== opposite
+    && contextTrend !== opposite;
 }
 
 export function verificarTimeStop(position, now = new Date()) {
@@ -435,6 +453,7 @@ export function verificarTimeStop(position, now = new Date()) {
 }
 
 function reversalZoneSignal(symbol, timeframe, candles, trends, setup, indicators, options, zoneAlert) {
+  if (!trendFollowingAllowed("compra", trends)) return null;
   const demandZone = indicators.supportZone;
   if (!demandZone || !isDemandRejection(last(candles), indicators, demandZone)) return null;
   const scored = directionScore("compra", trends, setup, options);
